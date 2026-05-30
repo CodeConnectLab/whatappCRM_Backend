@@ -1,0 +1,82 @@
+import { Types } from 'mongoose';
+import { MetaWhatsappConfigModel } from './meta-whatsapp-config.model.js';
+import { WhatsappNumberModel } from '../twilio/whatsapp-number.model.js';
+import { getWallet, getCreditPerMessage } from '../wallet/wallet.service.js';
+
+export type MetaReadiness = {
+  credentialsConfigured: boolean;
+  senderConfigured: boolean;
+  webhookVerified: boolean;
+  defaultSenderId?: string;
+  readyForOutbound: boolean;
+  issues: string[];
+};
+
+export async function getMetaReadiness(companyId: string): Promise<MetaReadiness> {
+  const oid = new Types.ObjectId(companyId);
+  const [metaCfg, senders] = await Promise.all([
+    MetaWhatsappConfigModel.findOne({ companyId: oid, deletedAt: null }).lean(),
+    WhatsappNumberModel.find({ companyId: oid, provider: 'meta', deletedAt: null }).lean(),
+  ]);
+
+  const credentialsConfigured = Boolean(metaCfg?.accessTokenEncrypted && metaCfg?.appSecretEncrypted);
+  const senderConfigured = senders.some((s) => Boolean(s.metaPhoneNumberId?.trim()));
+  const webhookVerified = metaCfg?.webhookVerificationStatus === 'verified';
+  const defaultSender =
+    senders.find((s) => s.isDefault && s.metaPhoneNumberId) ??
+    senders.find((s) => s.metaPhoneNumberId);
+
+  const issues: string[] = [];
+  if (!credentialsConfigured) issues.push('Meta access token and app secret are not saved');
+  if (!senderConfigured) issues.push('No Meta WhatsApp sender (phone number ID) configured');
+  if (!webhookVerified) issues.push('Meta webhook is not verified yet');
+
+  return {
+    credentialsConfigured,
+    senderConfigured,
+    webhookVerified,
+    defaultSenderId: defaultSender ? String(defaultSender._id) : undefined,
+    readyForOutbound: credentialsConfigured && senderConfigured,
+    issues,
+  };
+}
+
+export async function assertCampaignCanStart(
+  companyId: string,
+  input: {
+    whatsappNumberId: Types.ObjectId;
+    templateId?: Types.ObjectId | null;
+    recipientCount: number;
+  },
+): Promise<void> {
+  if (input.recipientCount <= 0) {
+    throw new Error('Campaign has no recipients — add a contact group or contacts');
+  }
+  if (!input.templateId) {
+    throw new Error('Campaign needs a message template before starting');
+  }
+
+  const readiness = await getMetaReadiness(companyId);
+  if (!readiness.credentialsConfigured) {
+    throw new Error('Meta credentials are not configured — open Settings and save access token + app secret');
+  }
+  if (!readiness.webhookVerified) {
+    throw new Error('Meta webhook is not verified — paste the callback URL and verify token in Meta Developer Console');
+  }
+
+  const wa = await WhatsappNumberModel.findOne({
+    _id: input.whatsappNumberId,
+    companyId: new Types.ObjectId(companyId),
+    deletedAt: null,
+  }).lean();
+  if (!wa) throw new Error('WhatsApp sender not found for this workspace');
+  if (wa.provider === 'meta' && !wa.metaPhoneNumberId?.trim()) {
+    throw new Error('Selected Meta sender is missing phone number ID');
+  }
+
+  const wallet = await getWallet(companyId);
+  const needed = input.recipientCount * getCreditPerMessage();
+  if (wallet.balance < needed) {
+    throw new Error(`Insufficient credits: need ${needed}, wallet has ${wallet.balance}`);
+  }
+}
