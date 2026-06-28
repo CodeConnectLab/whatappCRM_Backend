@@ -20,13 +20,15 @@ export function createApp(): express.Express {
   app.set('trust proxy', 1);
   app.use(helmet());
   const allowedOrigins = [env.FRONTEND_URL, env.FRONTEND_URL.replace(/\/$/, '')];
-  app.use(cors({
-    origin: (origin, cb) => {
+  const corsOptions = {
+    origin: (origin: string | undefined, cb: (e: Error | null, ok?: boolean) => void) => {
       if (!origin || allowedOrigins.includes(origin)) cb(null, true);
       else cb(new Error('Not allowed by CORS'));
     },
     credentials: true,
-  }));
+  };
+  app.options('*', cors(corsOptions));
+  app.use(cors(corsOptions));
 
   app.get('/health', asyncHandler(healthCheck));
 

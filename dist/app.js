@@ -17,13 +17,15 @@ function createApp() {
   app.set("trust proxy", 1);
   app.use(helmet());
   const allowedOrigins = [env.FRONTEND_URL, env.FRONTEND_URL.replace(/\/$/, "")];
-  app.use(cors({
+  const corsOptions = {
     origin: (origin, cb) => {
       if (!origin || allowedOrigins.includes(origin)) cb(null, true);
       else cb(new Error("Not allowed by CORS"));
     },
     credentials: true
-  }));
+  };
+  app.options("*", cors(corsOptions));
+  app.use(cors(corsOptions));
   app.get("/health", asyncHandler(healthCheck));
   const metaJson = express.json({
     limit: "2mb",
