@@ -1,0 +1,32 @@
+import { z } from "zod";
+const optionalTrimmed = z.preprocess((v) => {
+  if (v == null || typeof v !== "string") return void 0;
+  const t = v.trim();
+  return t.length ? t : void 0;
+}, z.string().optional());
+const metaValidation = {
+  upsertConfig: z.object({
+    accessToken: z.preprocess(
+      (v) => typeof v === "string" ? v.trim() : v,
+      z.string().min(20, "Access token looks too short").optional()
+    ),
+    appSecret: z.preprocess(
+      (v) => typeof v === "string" ? v.trim() : v,
+      z.string().min(8, "App secret looks too short").optional()
+    ),
+    wabaId: optionalTrimmed,
+    webhookVerifyToken: z.preprocess(
+      (v) => typeof v === "string" ? v.trim() : v,
+      z.string().min(8).max(256).optional()
+    ),
+    regenerateWebhookVerifyToken: z.boolean().optional()
+  }).refine(
+    (data) => Boolean(
+      data.accessToken || data.appSecret || data.wabaId !== void 0 || data.webhookVerifyToken || data.regenerateWebhookVerifyToken
+    ),
+    { message: "Provide at least one field to update" }
+  )
+};
+export {
+  metaValidation
+};

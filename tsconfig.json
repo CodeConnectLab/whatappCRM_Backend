@@ -1,3 +1,25 @@
+// {
+//   "compilerOptions": {
+//     "target": "ES2022",
+//     "module": "NodeNext",
+//     "moduleResolution": "NodeNext",
+//     "outDir": "dist",
+//     "rootDir": "src",
+//     "strict": true,
+//     "esModuleInterop": true,
+//     "skipLibCheck": true,
+//     "forceConsistentCasingInFileNames": true,
+//     "resolveJsonModule": true,
+//     "declaration": true,
+//     "declarationMap": true,
+//     "sourceMap": true,
+//     "noUncheckedIndexedAccess": true,
+//     "noImplicitOverride": true,
+//     "incremental": true
+//   },
+//   "include": ["src/**/*"],
+//   "exclude": ["node_modules", "dist"]
+// }
 {
   "compilerOptions": {
     "target": "ES2022",
@@ -10,12 +32,14 @@
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "declaration": true,
-    "declarationMap": true,
-    "sourceMap": true,
+
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false,
+
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
-    "incremental": true
+    "incremental": false
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]
