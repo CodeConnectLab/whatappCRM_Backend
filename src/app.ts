@@ -19,7 +19,14 @@ export function createApp(): express.Express {
 
   app.set('trust proxy', 1);
   app.use(helmet());
-  app.use(cors({ origin: env.FRONTEND_URL, credentials: true }));
+  const allowedOrigins = [env.FRONTEND_URL, env.FRONTEND_URL.replace(/\/$/, '')];
+  app.use(cors({
+    origin: (origin, cb) => {
+      if (!origin || allowedOrigins.includes(origin)) cb(null, true);
+      else cb(new Error('Not allowed by CORS'));
+    },
+    credentials: true,
+  }));
 
   app.get('/health', asyncHandler(healthCheck));
 
