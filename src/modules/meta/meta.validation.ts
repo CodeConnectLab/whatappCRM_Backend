@@ -18,6 +18,7 @@ export const metaValidation = {
         z.string().min(8, 'App secret looks too short').optional(),
       ),
       wabaId: optionalTrimmed,
+      appId: optionalTrimmed,
       webhookVerifyToken: z.preprocess(
         (v) => (typeof v === 'string' ? v.trim() : v),
         z.string().min(8).max(256).optional(),
@@ -30,6 +31,7 @@ export const metaValidation = {
           data.accessToken ||
             data.appSecret ||
             data.wabaId !== undefined ||
+            data.appId !== undefined ||
             data.webhookVerifyToken ||
             data.regenerateWebhookVerifyToken,
         ),

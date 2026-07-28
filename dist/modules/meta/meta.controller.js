@@ -19,6 +19,7 @@ function toConfigResponse(doc) {
         appSecretConfigured: Boolean(doc.appSecretEncrypted),
         configured: Boolean(doc.accessTokenEncrypted && doc.appSecretEncrypted),
         wabaId: doc.wabaId ?? undefined,
+        appId: doc.appId ?? undefined,
         webhookSlug: slug,
         webhookUrl: slug ? buildMetaWebhookUrl(slug) : null,
         webhookVerifyToken: doc.webhookVerifyToken ?? undefined,
@@ -97,6 +98,9 @@ export async function upsertMetaWhatsappConfig(req, res) {
     }
     if (body.wabaId !== undefined) {
         set.wabaId = body.wabaId || undefined;
+    }
+    if (body.appId !== undefined) {
+        set.appId = body.appId || undefined;
     }
     const update = { $set: set, $setOnInsert: { companyId: oid } };
     if (body.regenerateWebhookVerifyToken) {

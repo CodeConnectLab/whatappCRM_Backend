@@ -17,7 +17,9 @@ type MetaGraphTextResponse = {
 };
 
 /** Decrypted Meta credentials for a company. */
-async function loadMetaConfig(companyId: string): Promise<{ token: string; wabaId?: string }> {
+async function loadMetaConfig(
+  companyId: string,
+): Promise<{ token: string; wabaId?: string; appId?: string }> {
   const cfg = await MetaWhatsappConfigModel.findOne({
     companyId: new Types.ObjectId(companyId),
     deletedAt: null,
@@ -28,7 +30,23 @@ async function loadMetaConfig(companyId: string): Promise<{ token: string; wabaI
   return {
     token: decryptSecret(cfg.accessTokenEncrypted),
     ...(cfg.wabaId?.trim() ? { wabaId: cfg.wabaId.trim() } : {}),
+    ...(cfg.appId?.trim() ? { appId: cfg.appId.trim() } : {}),
   };
+}
+
+type MetaError = { message?: string; error_user_msg?: string; error_user_title?: string };
+
+/**
+ * Meta rejections are almost always operator-fixable (bad category, missing
+ * sample, expired token), so they are re-thrown as 400 with Meta's own wording —
+ * a bare 500 would hide the one line that says how to fix it.
+ */
+function metaError(err: MetaError | undefined, status: number): Error & { status: number } {
+  const detail = err?.error_user_msg ?? err?.message ?? `Meta request failed (${status})`;
+  const title = err?.error_user_title;
+  const e = new Error(title ? `${title}: ${detail}` : detail) as Error & { status: number };
+  e.status = status >= 400 && status < 500 ? 400 : 502;
+  return e;
 }
 
 async function graphRequest<T>(
@@ -44,10 +62,10 @@ async function graphRequest<T>(
     },
     ...(init?.body ? { body: JSON.stringify(init.body) } : {}),
   });
-  const json = (await res.json()) as T & { error?: { message: string } };
+  const json = (await res.json()) as T & { error?: MetaError };
   if (!res.ok) {
     logger.warn('Meta Graph request failed', { url, status: res.status, json });
-    throw new Error(json.error?.message ?? `Meta request failed (${res.status})`);
+    throw metaError(json.error, res.status);
   }
   return json;
 }
@@ -171,6 +189,57 @@ export async function sendMetaWhatsappTemplate(input: {
   return { sid };
 }
 
+/** The App ID owning this token — needed for resumable uploads, not for messaging. */
+async function resolveAppId(token: string, storedAppId?: string): Promise<string> {
+  if (storedAppId) return storedAppId;
+  const json = await graphRequest<{ data?: { app_id?: string } }>(
+    `${GRAPH_BASE}/debug_token?input_token=${encodeURIComponent(token)}`,
+    token,
+  );
+  const appId = json.data?.app_id;
+  if (!appId) {
+    throw new Error(
+      'Could not determine your Meta App ID automatically — add it in Settings → WhatsApp (Meta)',
+    );
+  }
+  return appId;
+}
+
+/**
+ * Uploads an image through Meta's Resumable Upload API and returns the handle.
+ * Template creation rejects plain URLs in `example.header_handle`; only a handle
+ * produced here is accepted. (Sending a template later *does* take a plain link.)
+ */
+async function uploadHeaderImage(token: string, appId: string, imageUrl: string): Promise<string> {
+  const imgRes = await fetch(imageUrl);
+  if (!imgRes.ok) {
+    throw new Error(`Could not download the header image (${imgRes.status}) — is the URL public?`);
+  }
+  const contentType = imgRes.headers.get('content-type') ?? 'image/jpeg';
+  const bytes = Buffer.from(await imgRes.arrayBuffer());
+
+  const session = await graphRequest<{ id?: string }>(
+    `${GRAPH_BASE}/${appId}/uploads?file_length=${bytes.length}&file_type=${encodeURIComponent(contentType)}`,
+    token,
+    { method: 'POST' },
+  );
+  if (!session.id) throw new Error('Meta did not return an upload session');
+
+  // Raw binary with an OAuth (not Bearer) header — cannot go through graphRequest.
+  const res = await fetch(`${GRAPH_BASE}/${session.id}`, {
+    method: 'POST',
+    headers: { Authorization: `OAuth ${token}`, file_offset: '0' },
+    body: new Uint8Array(bytes),
+  });
+  const json = (await res.json()) as { h?: string; error?: MetaError };
+  if (!res.ok || !json.h) {
+    logger.warn('Meta header image upload failed', { status: res.status, json });
+    throw metaError(json.error, res.ok ? 502 : res.status);
+  }
+  logger.info('Meta header image uploaded', { appId, bytes: bytes.length });
+  return json.h;
+}
+
 /** Realistic sample values — Meta rejects templates whose examples look like placeholders. */
 const SAMPLE_VALUES: Record<TemplateVariable, string> = {
   name: 'Rahul',
@@ -193,7 +262,7 @@ export async function submitMetaTemplate(input: {
   language: string;
   headerImageUrl?: string;
 }): Promise<{ metaTemplateId: string; status: string }> {
-  const { token, wabaId } = await loadMetaConfig(input.companyId);
+  const { token, wabaId, appId: storedAppId } = await loadMetaConfig(input.companyId);
   if (!wabaId) {
     throw new Error('WABA ID missing — add it in Settings → WhatsApp (Meta) before submitting templates');
   }
@@ -201,10 +270,12 @@ export async function submitMetaTemplate(input: {
   const components: Record<string, unknown>[] = [];
 
   if (input.headerImageUrl) {
+    const appId = await resolveAppId(token, storedAppId);
+    const handle = await uploadHeaderImage(token, appId, input.headerImageUrl);
     components.push({
       type: 'HEADER',
       format: 'IMAGE',
-      example: { header_handle: [input.headerImageUrl] },
+      example: { header_handle: [handle] },
     });
   }
 

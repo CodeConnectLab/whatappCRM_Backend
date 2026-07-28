@@ -22,6 +22,7 @@ function toConfigResponse(doc: {
   accessTokenEncrypted?: string | null;
   appSecretEncrypted?: string | null;
   wabaId?: string | null;
+  appId?: string | null;
   webhookSlug?: string | null;
   webhookVerifyToken?: string | null;
   webhookVerificationStatus?: string | null;
@@ -35,6 +36,7 @@ function toConfigResponse(doc: {
     appSecretConfigured: Boolean(doc.appSecretEncrypted),
     configured: Boolean(doc.accessTokenEncrypted && doc.appSecretEncrypted),
     wabaId: doc.wabaId ?? undefined,
+    appId: doc.appId ?? undefined,
     webhookSlug: slug,
     webhookUrl: slug ? buildMetaWebhookUrl(slug) : null,
     webhookVerifyToken: doc.webhookVerifyToken ?? undefined,
@@ -82,6 +84,7 @@ export async function upsertMetaWhatsappConfig(req: Request, res: Response): Pro
     accessToken?: string;
     appSecret?: string;
     wabaId?: string;
+    appId?: string;
     webhookVerifyToken?: string;
     regenerateWebhookVerifyToken?: boolean;
   };
@@ -130,6 +133,10 @@ export async function upsertMetaWhatsappConfig(req: Request, res: Response): Pro
 
   if (body.wabaId !== undefined) {
     set.wabaId = body.wabaId || undefined;
+  }
+
+  if (body.appId !== undefined) {
+    set.appId = body.appId || undefined;
   }
 
   const update: { $set: Record<string, unknown>; $setOnInsert: { companyId: Types.ObjectId }; $unset?: Record<string, ''> } =

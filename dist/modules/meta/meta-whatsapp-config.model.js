@@ -19,6 +19,11 @@ const metaWhatsappConfigSchema = new Schema({
     webhookLastVerifyAt: { type: Date },
     webhookLastVerifyError: { type: String, trim: true },
     wabaId: { type: String, trim: true },
+    /**
+     * Meta App ID. Only needed to upload template header images (Resumable Upload
+     * API); auto-detected from the access token when left blank.
+     */
+    appId: { type: String, trim: true },
     deletedAt: { type: Date },
 }, { timestamps: true });
 metaWhatsappConfigSchema.index({ webhookVerifyToken: 1 }, { unique: true, sparse: true, partialFilterExpression: { webhookVerifyToken: { $type: 'string' } } });
