@@ -1,11 +1,15 @@
 import type { NextFunction, Request, Response } from 'express';
-import type { AnyZodObject } from 'zod';
+import type { ZodTypeAny } from 'zod';
 import { z } from 'zod';
 
+/**
+ * `ZodTypeAny` rather than `AnyZodObject`: schemas refined with `.refine()` or
+ * `.superRefine()` are `ZodEffects`, not `ZodObject`, and several routes pass those.
+ */
 type Schemas = {
-  body?: AnyZodObject;
-  query?: AnyZodObject;
-  params?: AnyZodObject;
+  body?: ZodTypeAny;
+  query?: ZodTypeAny;
+  params?: ZodTypeAny;
 };
 
 export function validateRequest(schemas: Schemas) {

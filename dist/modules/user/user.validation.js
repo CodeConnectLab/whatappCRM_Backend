@@ -1,4 +1,2 @@
-const userValidation = {};
-export {
-  userValidation
-};
+/** Reserved for PATCH /me etc. */
+export const userValidation = {};

@@ -1,40 +1,43 @@
-import twilio from "twilio";
-import { Types } from "mongoose";
-import { env } from "../../config/env.js";
-import { TwilioAccountModel } from "./twilio-account.model.js";
-import { decryptSecret } from "../../utils/encryption.js";
-import { logger } from "../../utils/logger.js";
+import twilio from 'twilio';
+import { Types } from 'mongoose';
+import { env } from '../../config/env.js';
+import { TwilioAccountModel } from './twilio-account.model.js';
+import { decryptSecret } from '../../utils/encryption.js';
+import { logger } from '../../utils/logger.js';
 function twilioStatusCallbackUrl() {
-  const base = env.PUBLIC_API_BASE_URL?.trim().replace(/\/$/, "");
-  if (!base) return void 0;
-  return `${base}/webhooks/twilio/status`;
+    const base = env.PUBLIC_API_BASE_URL?.trim().replace(/\/$/, '');
+    if (!base)
+        return undefined;
+    return `${base}/webhooks/twilio/status`;
 }
-async function getTwilioClientForCompany(companyId) {
-  const acc = await TwilioAccountModel.findOne({
-    companyId: new Types.ObjectId(companyId),
-    deletedAt: null
-  }).lean();
-  if (!acc) return null;
-  const token = decryptSecret(acc.authTokenEncrypted);
-  return twilio(acc.accountSid, token);
+export async function getTwilioClientForCompany(companyId) {
+    const acc = await TwilioAccountModel.findOne({
+        companyId: new Types.ObjectId(companyId),
+        deletedAt: null,
+    }).lean();
+    if (!acc)
+        return null;
+    const token = decryptSecret(acc.authTokenEncrypted);
+    return twilio(acc.accountSid, token);
 }
-async function sendTwilioWhatsappMessage(input) {
-  const client = await getTwilioClientForCompany(input.companyId);
-  if (!client) throw new Error("Twilio not configured");
-  const from = input.fromNumber.startsWith("whatsapp:") ? input.fromNumber : `whatsapp:${input.fromNumber}`;
-  const to = input.toPhone.startsWith("whatsapp:") ? input.toPhone : `whatsapp:${input.toPhone}`;
-  const statusCallback = twilioStatusCallbackUrl();
-  const msg = await client.messages.create({
-    from,
-    to,
-    body: input.body,
-    ...input.mediaUrl?.length ? { mediaUrl: input.mediaUrl } : {},
-    ...statusCallback ? { statusCallback, statusCallbackMethod: "POST" } : {}
-  });
-  logger.info("Twilio message created", { sid: msg.sid, companyId: input.companyId });
-  return { sid: msg.sid };
+export async function sendTwilioWhatsappMessage(input) {
+    const client = await getTwilioClientForCompany(input.companyId);
+    if (!client)
+        throw new Error('Twilio not configured');
+    const from = input.fromNumber.startsWith('whatsapp:')
+        ? input.fromNumber
+        : `whatsapp:${input.fromNumber}`;
+    const to = input.toPhone.startsWith('whatsapp:') ? input.toPhone : `whatsapp:${input.toPhone}`;
+    const statusCallback = twilioStatusCallbackUrl();
+    const msg = await client.messages.create({
+        from,
+        to,
+        body: input.body,
+        ...(input.mediaUrl?.length ? { mediaUrl: input.mediaUrl } : {}),
+        ...(statusCallback
+            ? { statusCallback, statusCallbackMethod: 'POST' }
+            : {}),
+    });
+    logger.info('Twilio message created', { sid: msg.sid, companyId: input.companyId });
+    return { sid: msg.sid };
 }
-export {
-  getTwilioClientForCompany,
-  sendTwilioWhatsappMessage
-};

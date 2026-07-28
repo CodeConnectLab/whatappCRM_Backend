@@ -7,8 +7,10 @@ type CheckStatus = 'ok' | 'error';
 
 async function checkMongo(): Promise<CheckStatus> {
   if (mongoose.connection.readyState !== 1) return 'error';
+  const db = mongoose.connection.db;
+  if (!db) return 'error';
   try {
-    await mongoose.connection.db.admin().ping();
+    await db.admin().ping();
     return 'ok';
   } catch {
     return 'error';

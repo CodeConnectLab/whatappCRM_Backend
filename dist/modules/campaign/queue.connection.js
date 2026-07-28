@@ -1,5 +1,2 @@
-import { createRedisConnection } from "../../config/redis.js";
-const redisConnection = createRedisConnection();
-export {
-  redisConnection
-};
+import { createRedisConnection } from '../../config/redis.js';
+export const redisConnection = createRedisConnection();
