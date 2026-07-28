@@ -16,7 +16,11 @@ import { redisConnection } from './queue.connection.js';
 
 import { debitCredits, getCreditPerMessage } from '../wallet/wallet.service.js';
 
-import { sendWhatsappMessage } from '../messaging/messaging.service.js';
+import { sendWhatsappMessage, sendWhatsappTemplateMessage } from '../messaging/messaging.service.js';
+
+import { TemplateModel } from '../template/template.model.js';
+
+import { buildParameterValues, type TemplateVariable } from '../template/template.service.js';
 
 import { logger } from '../../utils/logger.js';
 
@@ -122,25 +126,87 @@ export function startCampaignWorker(): Worker<CampaignJob> {
 
 
 
+      // Campaigns reach contacts outside the 24-hour window, so an approved Meta
+      // template is required. Session text only works for the Twilio path or when
+      // the template has not been submitted yet.
+
+      const tpl = camp.templateId ? await TemplateModel.findById(camp.templateId).lean() : null;
+
+      const mediaUrl = cm.mediaUrl && String(cm.mediaUrl).trim() ? String(cm.mediaUrl).trim() : '';
+
+      const useTemplate =
+
+        (wa.provider ?? 'twilio') === 'meta' && tpl?.status === 'APPROVED' && Boolean(tpl.metaTemplateName);
+
+
+
+      if ((wa.provider ?? 'twilio') === 'meta' && !useTemplate) {
+
+        const reason = !tpl
+
+          ? 'campaign has no template'
+
+          : `template "${tpl.name}" is ${String(tpl.status).toLowerCase()} on Meta — submit it and wait for approval`;
+
+        await CampaignMessageModel.updateOne(
+
+          { _id: cm._id },
+
+          { $set: { status: 'failed', error: reason } },
+
+        );
+
+        await CampaignModel.updateOne({ _id: camp._id }, { $inc: { 'stats.failed': 1 } });
+
+        return;
+
+      }
+
+
+
       try {
 
-        const { sid } = await sendWhatsappMessage({
+        const { sid } = useTemplate
 
-          companyId,
+          ? await sendWhatsappTemplateMessage({
 
-          whatsappNumberId: String(wa._id),
+              companyId,
 
-          toPhone: contact.phone,
+              whatsappNumberId: String(wa._id),
 
-          body: cm.body,
+              toPhone: contact.phone,
 
-          ...(cm.mediaUrl && String(cm.mediaUrl).trim()
+              templateName: tpl!.metaTemplateName!,
 
-            ? { mediaUrl: [String(cm.mediaUrl).trim()] }
+              language: tpl!.language ?? 'en',
 
-            : {}),
+              parameters: buildParameterValues(
 
-        });
+                (tpl!.variables ?? []) as TemplateVariable[],
+
+                contact,
+
+              ),
+
+              renderedBody: cm.body,
+
+              ...(mediaUrl ? { headerImageUrl: mediaUrl } : {}),
+
+            })
+
+          : await sendWhatsappMessage({
+
+              companyId,
+
+              whatsappNumberId: String(wa._id),
+
+              toPhone: contact.phone,
+
+              body: cm.body,
+
+              ...(mediaUrl ? { mediaUrl: [mediaUrl] } : {}),
+
+            });
 
 
 

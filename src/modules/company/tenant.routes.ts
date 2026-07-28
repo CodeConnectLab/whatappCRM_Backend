@@ -148,6 +148,17 @@ export function createTenantRouter(): Router {
     validateRequest({ body: templateValidation.create }),
     asyncHandler(templateCtrl.createTemplate),
   );
+  tenant.post(
+    '/templates/sync',
+    requireCompanyAdmin,
+    asyncHandler(templateCtrl.syncTemplates),
+  );
+  tenant.post(
+    '/templates/:id/submit',
+    requireCompanyAdmin,
+    validateRequest(templateValidation.submit),
+    asyncHandler(templateCtrl.submitTemplate),
+  );
   tenant.patch(
     '/templates/:id',
     requireCompanyAdmin,

@@ -7,7 +7,9 @@ import { WhatsappNumberModel } from "../twilio/whatsapp-number.model.js";
 import { CAMPAIGN_QUEUE } from "./campaign.queue.js";
 import { redisConnection } from "./queue.connection.js";
 import { debitCredits, getCreditPerMessage } from "../wallet/wallet.service.js";
-import { sendWhatsappMessage } from "../messaging/messaging.service.js";
+import { sendWhatsappMessage, sendWhatsappTemplateMessage } from "../messaging/messaging.service.js";
+import { TemplateModel } from "../template/template.model.js";
+import { buildParameterValues } from "../template/template.service.js";
 import { logger } from "../../utils/logger.js";
 function startCampaignWorker() {
   return new Worker(
@@ -48,13 +50,37 @@ function startCampaignWorker() {
         );
         return;
       }
+      const tpl = camp.templateId ? await TemplateModel.findById(camp.templateId).lean() : null;
+      const mediaUrl = cm.mediaUrl && String(cm.mediaUrl).trim() ? String(cm.mediaUrl).trim() : "";
+      const useTemplate = (wa.provider ?? "twilio") === "meta" && tpl?.status === "APPROVED" && Boolean(tpl.metaTemplateName);
+      if ((wa.provider ?? "twilio") === "meta" && !useTemplate) {
+        const reason = !tpl ? "campaign has no template" : `template "${tpl.name}" is ${String(tpl.status).toLowerCase()} on Meta \u2014 submit it and wait for approval`;
+        await CampaignMessageModel.updateOne(
+          { _id: cm._id },
+          { $set: { status: "failed", error: reason } }
+        );
+        await CampaignModel.updateOne({ _id: camp._id }, { $inc: { "stats.failed": 1 } });
+        return;
+      }
       try {
-        const { sid } = await sendWhatsappMessage({
+        const { sid } = useTemplate ? await sendWhatsappTemplateMessage({
+          companyId,
+          whatsappNumberId: String(wa._id),
+          toPhone: contact.phone,
+          templateName: tpl.metaTemplateName,
+          language: tpl.language ?? "en",
+          parameters: buildParameterValues(
+            tpl.variables ?? [],
+            contact
+          ),
+          renderedBody: cm.body,
+          ...mediaUrl ? { headerImageUrl: mediaUrl } : {}
+        }) : await sendWhatsappMessage({
           companyId,
           whatsappNumberId: String(wa._id),
           toPhone: contact.phone,
           body: cm.body,
-          ...cm.mediaUrl && String(cm.mediaUrl).trim() ? { mediaUrl: [String(cm.mediaUrl).trim()] } : {}
+          ...mediaUrl ? { mediaUrl: [mediaUrl] } : {}
         });
         const marked = await CampaignMessageModel.findOneAndUpdate(
           { _id: cm._id, status: { $ne: "sent" } },
