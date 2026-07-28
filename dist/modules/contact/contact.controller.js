@@ -2,6 +2,7 @@ import { Types } from 'mongoose';
 import { ContactModel } from './contact.model.js';
 import { ContactGroupModel } from './contact-group.model.js';
 import { parsePagination, paginate } from '../../utils/pagination.js';
+import { e164PhoneSchema, normalizeE164 } from '../../utils/phone.js';
 const UTF8_BOM = '\uFEFF';
 /** Minimal CSV line parser (handles quoted fields and doubled quotes). */
 function parseCsvLine(line) {
@@ -151,8 +152,27 @@ export async function importContactsCsv(req, res) {
         const lineNum = i + 1;
         const cols = parseCsvLine(lines[i]);
         const phoneRaw = cols[phoneColumn] ?? '';
-        const phone = normalizePhone(phoneRaw);
-        if (!phone) {
+        const cleaned = normalizePhone(phoneRaw);
+        if (!cleaned) {
+            skipped++;
+            continue;
+        }
+        // Excel rewrites long numbers as "9.19316E+11" — the digits are already gone,
+        // so importing it would silently create a contact nobody can be messaged at.
+        if (/^\d(?:\.\d+)?[eE][+-]?\d+$/.test(cleaned)) {
+            errors.push({
+                line: lineNum,
+                message: `"${cleaned}" is a spreadsheet-mangled number. Format the phone column as Text before saving the CSV.`,
+            });
+            skipped++;
+            continue;
+        }
+        const phone = normalizeE164(cleaned);
+        if (!e164PhoneSchema.safeParse(phone).success) {
+            errors.push({
+                line: lineNum,
+                message: `Invalid phone "${phoneRaw.trim()}" — use E.164 format, e.g. +919876543210.`,
+            });
             skipped++;
             continue;
         }
