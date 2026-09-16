@@ -8,7 +8,8 @@ import { emitToCompany } from '../../socket/io.js';
 import { logger } from '../../utils/logger.js';
 import { MetaWhatsappConfigModel } from '../meta/meta-whatsapp-config.model.js';
 import { decryptSecret } from '../../utils/encryption.js';
-import { extractPhoneNumberId, normalizeInboundPhone, verifyMetaSignature, } from '../meta/meta-webhook.utils.js';
+import { extractPhoneNumberId, inboundMessageText, normalizeInboundPhone, normalizeReferral, verifyMetaSignature, } from '../meta/meta-webhook.utils.js';
+import { pushChatToCrm } from '../crm/crm-bridge.service.js';
 async function recordWebhookVerifyResult(companyId, ok, error) {
     if (!companyId)
         return;
@@ -173,7 +174,12 @@ export async function metaWhatsappWebhook(req, res) {
                 const companyId = String(sender.companyId);
                 const profileName = value.contacts?.[0]?.profile?.name;
                 for (const m of value.messages ?? []) {
-                    if (m.type !== 'text' || !m.text?.body || !m.from)
+                    if (!m.from)
+                        continue;
+                    // Every inbound type is kept. Dropping non-text used to lose any lead whose
+                    // first contact was an image or an ad button tap.
+                    const body = inboundMessageText(m);
+                    if (!body)
                         continue;
                     const fromPhone = normalizeInboundPhone(m.from);
                     const sid = m.id ?? '';
@@ -188,20 +194,46 @@ export async function metaWhatsappWebhook(req, res) {
                         contactName: profileName,
                         whatsappNumberId: new Types.ObjectId(sender._id),
                     });
+                    const referral = normalizeReferral(m.referral);
                     const msg = await MessageModel.create({
                         companyId: new Types.ObjectId(companyId),
                         chatId: new Types.ObjectId(chatId),
                         direction: 'inbound',
-                        body: m.text.body,
+                        body,
+                        messageType: m.type ?? 'text',
                         status: 'delivered',
                         twilioSid: sid || undefined,
+                        referral,
+                        metaMediaId: m.image?.id ?? m.video?.id ?? m.audio?.id ?? m.document?.id ?? m.sticker?.id,
                     });
                     const created = await MessageModel.findById(msg._id).lean();
-                    await ChatModel.updateOne({ _id: chatId }, {
-                        $set: { lastMessageAt: new Date(), lastMessagePreview: m.text.body.slice(0, 140) },
-                        $inc: { unreadCount: 1 },
-                    });
+                    const chatUpdate = {
+                        lastMessageAt: new Date(),
+                        lastMessagePreview: body.slice(0, 140),
+                    };
+                    // The referral rides only on the opening message of a conversation, so this
+                    // is the one chance to record which ad produced the lead.
+                    if (referral) {
+                        chatUpdate.referral = { ...referral, capturedAt: new Date() };
+                    }
+                    const existingChat = await ChatModel.findById(chatId)
+                        .select('firstInboundAt crmSyncStatus')
+                        .lean();
+                    const isFirstInbound = !existingChat?.firstInboundAt;
+                    if (isFirstInbound) {
+                        chatUpdate.firstInboundMessage = body;
+                        chatUpdate.firstInboundAt = new Date();
+                    }
+                    await ChatModel.updateOne({ _id: chatId }, { $set: chatUpdate, $inc: { unreadCount: 1 } });
                     emitToCompany(companyId, 'message:new', { chatId, message: created });
+                    // Hand the lead to the client's CRM once per conversation. Detached on purpose:
+                    // Meta retires a webhook that does not answer within seconds, so a slow or down
+                    // CRM must never hold up the 200 or the inbox.
+                    if (isFirstInbound && !existingChat?.crmSyncStatus) {
+                        void pushChatToCrm(companyId, chatId).catch((err) => {
+                            logger.error('CRM bridge: unhandled push error', { companyId, chatId, err });
+                        });
+                    }
                 }
                 const statusMap = {
                     delivered: 'delivered',

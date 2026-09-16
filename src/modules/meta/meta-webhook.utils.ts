@@ -31,20 +31,60 @@ export function verifyMetaSignature(
   }
 }
 
+/**
+ * Click-to-WhatsApp referral, present on the FIRST inbound message of a conversation
+ * started from an ad or a post. Meta never repeats it on later messages, so the ad
+ * attribution has to be captured at that first message or it is lost for good.
+ */
+export type MetaReferral = {
+  source_url?: string;
+  /** Ad id (source_type "ad") or post id (source_type "post"). */
+  source_id?: string;
+  source_type?: string;
+  headline?: string;
+  body?: string;
+  media_type?: string;
+  image_url?: string;
+  video_url?: string;
+  thumbnail_url?: string;
+  /** Click id Meta mints at the ad tap — required by the Conversions API later. */
+  ctwa_clid?: string;
+};
+
+export type MetaInboundMessage = {
+  from?: string;
+  id?: string;
+  type?: string;
+  timestamp?: string;
+  text?: { body?: string };
+  image?: { id?: string; mime_type?: string; caption?: string };
+  video?: { id?: string; mime_type?: string; caption?: string };
+  audio?: { id?: string; mime_type?: string };
+  document?: { id?: string; mime_type?: string; caption?: string; filename?: string };
+  sticker?: { id?: string; mime_type?: string };
+  location?: { latitude?: number; longitude?: number; name?: string; address?: string };
+  contacts?: { name?: { formatted_name?: string } }[];
+  button?: { text?: string; payload?: string };
+  interactive?: {
+    type?: string;
+    button_reply?: { id?: string; title?: string };
+    list_reply?: { id?: string; title?: string; description?: string };
+  };
+  reaction?: { emoji?: string; message_id?: string };
+  order?: { catalog_id?: string; text?: string };
+  context?: { from?: string; id?: string };
+  referral?: MetaReferral;
+  errors?: { code?: number; title?: string; message?: string }[];
+};
+
 export type MetaWebhookBody = {
   entry?: {
     changes?: {
       field?: string;
       value?: {
-        metadata?: { phone_number_id?: string };
-        messages?: {
-          from?: string;
-          id?: string;
-          type?: string;
-          text?: { body?: string };
-          timestamp?: string;
-        }[];
-        contacts?: { profile?: { name?: string } }[];
+        metadata?: { phone_number_id?: string; display_phone_number?: string };
+        messages?: MetaInboundMessage[];
+        contacts?: { profile?: { name?: string }; wa_id?: string }[];
         statuses?: {
           id?: string;
           status?: string;
@@ -74,4 +114,92 @@ export function extractPhoneNumberId(body: MetaWebhookBody): string | undefined 
 export function normalizeInboundPhone(from: string): string {
   const d = from.replace(/\D/g, '');
   return d ? `+${d}` : from;
+}
+
+/**
+ * Readable body for any inbound message type.
+ *
+ * Non-text messages used to be dropped on the floor, which silently lost every lead
+ * whose first contact was an image or an ad button tap. Everything now lands in the
+ * inbox with a caption or a `[type]` placeholder so the conversation is never missed.
+ */
+export function inboundMessageText(m: MetaInboundMessage): string {
+  switch (m.type) {
+    case 'text':
+      return m.text?.body ?? '';
+    case 'image':
+      return m.image?.caption ?? '[image]';
+    case 'video':
+      return m.video?.caption ?? '[video]';
+    case 'document':
+      return m.document?.caption ?? `[document${m.document?.filename ? `: ${m.document.filename}` : ''}]`;
+    case 'audio':
+      return '[voice message]';
+    case 'sticker':
+      return '[sticker]';
+    case 'location': {
+      const loc = m.location;
+      const label = loc?.name ?? loc?.address;
+      if (label) return `[location: ${label}]`;
+      if (loc?.latitude != null && loc?.longitude != null) {
+        return `[location: ${loc.latitude}, ${loc.longitude}]`;
+      }
+      return '[location]';
+    }
+    case 'contacts': {
+      const names = (m.contacts ?? [])
+        .map((c) => c.name?.formatted_name)
+        .filter((n): n is string => Boolean(n));
+      return names.length ? `[contact: ${names.join(', ')}]` : '[contact card]';
+    }
+    case 'button':
+      return m.button?.text ?? '[button]';
+    case 'interactive':
+      return (
+        m.interactive?.button_reply?.title ?? m.interactive?.list_reply?.title ?? '[interactive reply]'
+      );
+    case 'reaction':
+      return m.reaction?.emoji ? `[reacted ${m.reaction.emoji}]` : '[reaction]';
+    case 'order':
+      return m.order?.text ?? '[order]';
+    case 'unsupported':
+      return '[unsupported message]';
+    default:
+      return m.type ? `[${m.type}]` : '[message]';
+  }
+}
+
+export type NormalizedReferral = {
+  ctwaClid?: string;
+  sourceId?: string;
+  sourceType?: string;
+  sourceUrl?: string;
+  headline?: string;
+  adBody?: string;
+  mediaType?: string;
+  imageUrl?: string;
+  videoUrl?: string;
+  thumbnailUrl?: string;
+};
+
+/**
+ * `source_type` is "ad" for a true Click-to-WhatsApp ad and "post" for a boosted post;
+ * only the former carries a `ctwa_clid` worth sending back through the Conversions API.
+ */
+export function normalizeReferral(ref: MetaReferral | undefined): NormalizedReferral | undefined {
+  if (!ref) return undefined;
+  const out: NormalizedReferral = {
+    ctwaClid: ref.ctwa_clid,
+    sourceId: ref.source_id,
+    sourceType: ref.source_type,
+    sourceUrl: ref.source_url,
+    headline: ref.headline,
+    adBody: ref.body,
+    mediaType: ref.media_type,
+    imageUrl: ref.image_url,
+    videoUrl: ref.video_url,
+    thumbnailUrl: ref.thumbnail_url,
+  };
+  const hasAny = Object.values(out).some((v) => typeof v === 'string' && v.length > 0);
+  return hasAny ? out : undefined;
 }
