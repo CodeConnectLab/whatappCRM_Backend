@@ -26,6 +26,26 @@ export async function listMessages(companyId, chatId, opts) {
     const rows = await MessageModel.find(filter).sort({ createdAt: -1 }).limit(limit).lean();
     return rows.reverse();
 }
+/**
+ * Clear a conversation's unread badge.
+ *
+ * The counter was only ever incremented by the inbound webhooks and had nothing to
+ * reset it, so every chat ever opened stayed unread and the workspace total climbed
+ * past the number of conversations.
+ */
+export async function markChatRead(companyId, chatId) {
+    const res = await ChatModel.updateOne({
+        _id: new Types.ObjectId(chatId),
+        companyId: new Types.ObjectId(companyId),
+        deletedAt: null,
+        unreadCount: { $gt: 0 },
+    }, { $set: { unreadCount: 0 } });
+    // Only announce a real change, so opening an already-read chat does not churn
+    // every other agent's inbox.
+    if (res.modifiedCount > 0) {
+        emitToCompany(companyId, 'chat:read', { chatId, unreadCount: 0 });
+    }
+}
 export async function sendOutboundChatMessage(input) {
     const chat = await ChatModel.findOne({
         _id: new Types.ObjectId(input.chatId),

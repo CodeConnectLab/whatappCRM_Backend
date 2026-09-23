@@ -162,8 +162,14 @@ export function inboundMessageText(m: MetaInboundMessage): string {
       return m.reaction?.emoji ? `[reacted ${m.reaction.emoji}]` : '[reaction]';
     case 'order':
       return m.order?.text ?? '[order]';
-    case 'unsupported':
-      return '[unsupported message]';
+    case 'unsupported': {
+      // Meta sends type "unsupported" with an errors array saying why — usually
+      // error 131051, a WhatsApp feature the Cloud API does not relay (polls,
+      // view-once media, live location, deleted messages and similar). Surfacing
+      // the reason beats a bare placeholder an agent cannot act on.
+      const reason = inboundErrorText(m);
+      return reason ? `[unsupported message — ${reason}]` : '[unsupported message]';
+    }
     default:
       return m.type ? `[${m.type}]` : '[message]';
   }
@@ -202,4 +208,16 @@ export function normalizeReferral(ref: MetaReferral | undefined): NormalizedRefe
   };
   const hasAny = Object.values(out).some((v) => typeof v === 'string' && v.length > 0);
   return hasAny ? out : undefined;
+}
+
+/**
+ * Human-readable reason from an inbound message's `errors` array, when Meta could
+ * not deliver the content itself.
+ */
+export function inboundErrorText(m: MetaInboundMessage): string | undefined {
+  const err = m.errors?.[0];
+  if (!err) return undefined;
+  const text = err.message ?? err.title;
+  if (text) return err.code != null ? `${text} (${err.code})` : text;
+  return err.code != null ? `Meta error ${err.code}` : undefined;
 }

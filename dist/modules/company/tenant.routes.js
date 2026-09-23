@@ -75,6 +75,7 @@ export function createTenantRouter() {
         params: chatValidation.messagesParams,
         query: chatValidation.messagesQuery,
     }), asyncHandler(chatCtrl.getMessages));
+    tenant.post('/chats/:chatId/read', validateRequest({ params: chatValidation.messagesParams }), asyncHandler(chatCtrl.markRead));
     tenant.post('/chats/:chatId/messages', validateRequest(chatValidation.postMessage), asyncHandler(chatCtrl.postMessage));
     tenant.post('/media/presign', validateRequest({ body: mediaValidation.presign }), asyncHandler(mediaCtrl.presignUpload));
     tenant.get('/media', asyncHandler(mediaCtrl.listMedia));

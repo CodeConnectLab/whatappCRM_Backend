@@ -11,6 +11,7 @@ import { MetaWhatsappConfigModel } from '../meta/meta-whatsapp-config.model.js';
 import { decryptSecret } from '../../utils/encryption.js';
 import {
   extractPhoneNumberId,
+  inboundErrorText,
   inboundMessageText,
   normalizeInboundPhone,
   normalizeReferral,
@@ -18,6 +19,7 @@ import {
   verifyMetaSignature,
 } from '../meta/meta-webhook.utils.js';
 import { pushChatToCrm } from '../crm/crm-bridge.service.js';
+import { WebhookLogModel } from './webhook-log.model.js';
 
 type MetaConfigLean = {
   companyId: Types.ObjectId;
@@ -244,6 +246,29 @@ export async function metaWhatsappWebhook(req: Request, res: Response): Promise<
           });
 
           const referral = normalizeReferral(m.referral);
+          const inboundError = inboundErrorText(m);
+
+          // Meta relays some WhatsApp features as type "unsupported" with no content.
+          // Keep the raw payload so the specific feature is identifiable later — the
+          // placeholder alone leaves nothing to diagnose from.
+          if (inboundError || m.type === 'unsupported') {
+            try {
+              await WebhookLogModel.create({
+                companyId: new Types.ObjectId(companyId),
+                provider: 'meta',
+                path: req.path,
+                payload: { messageType: m.type, message: m, contacts: value.contacts },
+                signatureValid: signatureOk,
+              });
+            } catch (logErr) {
+              logger.warn('Could not store unsupported-message payload', { err: logErr });
+            }
+            logger.warn('Meta inbound: unsupported message type', {
+              companyId,
+              messageType: m.type,
+              reason: inboundError,
+            });
+          }
 
           const msg = await MessageModel.create({
             companyId: new Types.ObjectId(companyId),
@@ -252,6 +277,7 @@ export async function metaWhatsappWebhook(req: Request, res: Response): Promise<
             body,
             messageType: m.type ?? 'text',
             status: 'delivered',
+            statusDetail: inboundError,
             twilioSid: sid || undefined,
             referral,
             metaMediaId:
