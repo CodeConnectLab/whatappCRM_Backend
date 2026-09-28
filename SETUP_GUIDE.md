@@ -516,6 +516,84 @@ pm2 logs wtsp-backend --lines 20
 
 ---
 
+## 11B. Team, Leads, Media aur Auto-Responses
+
+Ye chaar features ek hi inbound-lead pipeline pe chalte hain. Code deploy karne ke baad
+in steps ko ek baar follow karo.
+
+### Users seedhe banao (koi self-registration nahi)
+
+Console → **Team** → **Add new user**. Name, email, role aur ek starting password daalo
+(Generate button random bana deta hai). Password sirf ek baar screen pe dikhta hai —
+copy karke user ko de do. User pehli baar login karega to app usse apna password chunne
+ko kahegi.
+
+- **Agent** — sirf apne assigned leads dekhta hai.
+- **Company admin** — sab kuch dekhta hai, leads reassign kar sakta hai.
+- **In rotation** checkbox band karne se agent ko naye leads milna ruk jaate hain
+  (chhutti, training) — workspace se hataane ki zaroorat nahi.
+
+Kisi member ka password bhool jaane par: uski row me **Password** → naya password set ho
+jaata hai aur wo har device se logout ho jaata hai.
+
+### Lead round-robin
+
+Naya WhatsApp lead us agent ko jaata hai jiske paas sabse kam **open** leads hain
+(barabari hone par jo sabse der se wait kar raha hai). Koi stored pointer nahi hai, is
+liye jaise leads close hote hain queue khud theek hota rehta hai.
+
+> **Deploy ke baad ek baar zaroori:** purane chats par koi owner nahi hai, aur agent ab
+> sirf apne leads dekhta hai — matlab unka inbox khaali dikhega. Admin ko
+> **Leads** page par ek baar **Distribute** button dabana hai; wo poora backlog rotation
+> me baant deta hai.
+
+Auto-assignment band karna ho to company settings me `autoAssignLeads: false` save kar do
+(default on hai). Leads phir unassigned aate hain aur admin manually baantega.
+
+### Media (image / video / PDF / document)
+
+S3 ya MinIO configured hona zaroori hai (Section 8). Iske bina attachments kaam nahi
+karenge — chat me text chalta rahega aur log me warning aayegi.
+
+Bucket **public** karne ki zaroorat **nahi** hai. App har read ke liye short-lived
+presigned URL banati hai, aur WhatsApp ko bhejne ke liye 15-minute ka signed link deti
+hai. Bucket private hi rehna chahiye.
+
+Inbound attachments turant download hoke aapke bucket me copy ho jaate hain — Meta aur
+Twilio dono apni media 5–10 minute me expire kar dete hain aur token maangte hain, is
+liye baad me fetch karna possible nahi hai.
+
+WhatsApp ki limits (app inhe pehle hi reject kar deti hai): image 5 MB, video 16 MB,
+audio 16 MB, document 100 MB, sticker 512 KB. Jo type WhatsApp support nahi karta (HEIC,
+GIF, SVG) wo document ban ke chala jaata hai.
+
+### Products aur auto-responses
+
+Console → **Automation** (sirf company admin).
+
+1. **Products** tab me product banao. Har product ke saath Meta ad IDs, ad headline ke
+   words, aur lead ke message ke keywords daalo. Lead aane par system isi order me match
+   karta hai: ad ID → headline → keyword → dedicated sender. Ad ID sabse pakka signal hai
+   kyunki Meta khud bhejta hai.
+2. **Auto responses** tab me rule banao. Rules `priority` ke order me chalte hain aur
+   **pehla match jeetta hai** — is liye lead ko ek hi jawab milta hai, teen nahi.
+3. Rule save karne se pehle **Test which rule would answer** box me lead ka message likh
+   ke check kar lo ki kaunsa rule chalega.
+
+**24-hour window:** plain message sirf contact ke last message ke 24 ghante ke andar
+deliver hota hai — welcome message ke liye ye theek hai, kyunki lead ka message hi window
+kholta hai. Us window ke baahar WhatsApp sirf approved template bhejne deta hai, to un
+rules me **Approved template** chuno (Templates page se pehle approve karwao).
+
+Message me ye placeholders chalte hain: `{{name}}`, `{{phone}}`, `{{email}}`,
+`{{product}}`, `{{agent}}`.
+
+**`Nobody replied in time` trigger abhi fire nahi hota** — usko background sweep chahiye
+jo ab tak nahi bana. Rule save ho jaayega par chalega nahi. Baaki saare triggers aaj kaam
+karte hain.
+
+---
+
 ## 12. Final Checklist
 
 ### Server
@@ -557,3 +635,11 @@ pm2 logs wtsp-backend --lines 20
 - [ ] `/health` → `{"status":"ok"}`
 - [ ] Login kaam kar raha hai
 - [ ] Message bhej sakte ho
+
+### Team, Leads aur Automation
+- [ ] Team → Add new user se ek agent banaya, uska login test kiya
+- [ ] Kam se kam ek agent **In rotation** hai
+- [ ] Leads page → **Distribute** ek baar chalaya (purane chats ke liye)
+- [ ] S3/MinIO configured — chat me image aur PDF bhej ke dekha
+- [ ] Inbound image bheji, wo chat me dikh rahi hai
+- [ ] Automation → ek product aur ek auto-response banaya, preview se verify kiya

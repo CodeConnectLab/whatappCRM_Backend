@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { ChatModel, OPEN_LEAD_STATUSES, type LeadStatus } from './chat.model.js';
+import { ChatModel, openLeadStatusFilter, type LeadStatus } from './chat.model.js';
 import { ChatNoteModel } from './chat-note.model.js';
 import { ContactModel } from '../contact/contact.model.js';
 import { MessageModel } from './message.model.js';
@@ -141,7 +141,10 @@ export async function listChats(
   }
 
   if (filter.status === 'open') {
-    query.status = { $in: [...OPEN_LEAD_STATUSES] };
+    query.status = openLeadStatusFilter();
+  } else if (filter.status === 'new') {
+    // A chat created before the pipeline existed has no status; it is a new lead.
+    query.status = { $in: ['new', null] };
   } else if (filter.status) {
     query.status = filter.status;
   }
@@ -572,7 +575,9 @@ export async function leadStatusCounts(
   const counts: Record<string, number> = { new: 0, in_progress: 0, qualified: 0, won: 0, lost: 0 };
   let total = 0;
   for (const r of rows) {
-    if (r._id && r._id in counts) counts[r._id] = r.n;
+    // A null group is a pre-pipeline chat, which counts as new.
+    const key = r._id ?? 'new';
+    if (key in counts) counts[key] = (counts[key] ?? 0) + r.n;
     total += r.n;
   }
 
@@ -581,7 +586,7 @@ export async function leadStatusCounts(
       ? await ChatModel.countDocuments({
           companyId: new Types.ObjectId(companyId),
           deletedAt: null,
-          status: { $in: [...OPEN_LEAD_STATUSES] },
+          status: openLeadStatusFilter(),
           $or: [{ assignedTo: null }, { assignedTo: { $exists: false } }],
         })
       : 0;

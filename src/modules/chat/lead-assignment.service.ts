@@ -1,5 +1,5 @@
 import { Types } from 'mongoose';
-import { ChatModel, OPEN_LEAD_STATUSES } from './chat.model.js';
+import { ChatModel, openLeadStatusFilter } from './chat.model.js';
 import { MembershipModel } from '../company/membership.model.js';
 import { CompanyModel } from '../company/company.model.js';
 import { emitToCompany } from '../../socket/io.js';
@@ -24,7 +24,7 @@ export async function countOpenLeadsByAssignee(companyId: string): Promise<Map<s
         companyId: new Types.ObjectId(companyId),
         deletedAt: null,
         assignedTo: { $ne: null },
-        status: { $in: [...OPEN_LEAD_STATUSES] },
+        status: openLeadStatusFilter(),
       },
     },
     { $group: { _id: '$assignedTo', n: { $sum: 1 } } },
@@ -220,7 +220,7 @@ export async function unassignLeadsOf(companyId: string, userId: string): Promis
     {
       companyId: new Types.ObjectId(companyId),
       assignedTo: new Types.ObjectId(userId),
-      status: { $in: [...OPEN_LEAD_STATUSES] },
+      status: openLeadStatusFilter(),
       deletedAt: null,
     },
     { $unset: { assignedTo: '', assignedAt: '', assignedBy: '', assignmentMethod: '' } },
@@ -246,7 +246,7 @@ export async function distributeUnassignedLeads(input: {
   const pending = await ChatModel.find({
     companyId: new Types.ObjectId(input.companyId),
     deletedAt: null,
-    status: { $in: [...OPEN_LEAD_STATUSES] },
+    status: openLeadStatusFilter(),
     $or: [{ assignedTo: null }, { assignedTo: { $exists: false } }],
   })
     .sort({ lastMessageAt: 1 })

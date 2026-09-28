@@ -13,6 +13,18 @@ export const OPEN_LEAD_STATUSES = ['new', 'in_progress', 'qualified'] as const;
 export const ASSIGNMENT_METHODS = ['auto', 'manual', 'self'] as const;
 
 /**
+ * Matcher for "still needs attention".
+ *
+ * `null` is in the list on purpose: conversations that predate the lead pipeline carry
+ * no `status` at all, and `$in: [null]` matches a missing field. Without it every
+ * existing chat would look closed — invisible to the round-robin, the counts and the
+ * distribute button alike.
+ */
+export const openLeadStatusFilter = (): { $in: (string | null)[] } => ({
+  $in: [...OPEN_LEAD_STATUSES, null],
+});
+
+/**
  * First-touch ad attribution for the whole conversation.
  *
  * Meta sends the referral once, on the opening message; copying it onto the chat keeps

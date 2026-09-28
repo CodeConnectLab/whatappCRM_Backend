@@ -139,9 +139,10 @@ function triggerMatches(rule: RuleDoc, ctx: AutoResponseContext): boolean {
     case 'keyword':
       return Boolean(rule.keywords?.length) && containsAny(ctx.messageBody, rule.keywords ?? []);
     case 'outside_hours':
-      // The business-hours window describes when the office is OPEN, so this trigger is
-      // the complement of it.
-      return !withinBusinessHours(rule, new Date());
+      // The window describes when the office is OPEN, so this trigger is its complement —
+      // and it is an opening-message greeting ("we're closed, we'll call you"), not a
+      // reply to every message someone sends overnight.
+      return ctx.isFirstInbound && !withinBusinessHours(rule, new Date());
     case 'no_agent_reply':
       // Driven by the follow-up sweep, never by an inbound message.
       return false;
@@ -182,10 +183,16 @@ function conditionsMatch(rule: RuleDoc, ctx: AutoResponseContext): boolean {
 }
 
 /** Placeholders an auto-response body may use, beyond the shared contact ones. */
-async function renderBody(
+function renderBody(
   body: string,
-  ctx: { contactName?: string | null; contactPhone?: string | null; contactEmail?: string | null; productName?: string | null; agentName?: string | null },
-): Promise<string> {
+  ctx: {
+    contactName?: string | null;
+    contactPhone?: string | null;
+    contactEmail?: string | null;
+    productName?: string | null;
+    agentName?: string | null;
+  },
+): string {
   let out = applyTemplate(body, {
     name: ctx.contactName,
     phone: ctx.contactPhone,
@@ -346,7 +353,7 @@ export async function runAutoResponses(ctx: AutoResponseContext): Promise<void> 
           email: contact.email,
         });
       } else {
-        const body = await renderBody(rule.body ?? '', {
+        const body = renderBody(rule.body ?? '', {
           contactName: contact.name,
           contactPhone: contact.phone,
           contactEmail: contact.email,
