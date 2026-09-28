@@ -11,6 +11,7 @@ import { MetaWhatsappConfigModel } from '../meta/meta-whatsapp-config.model.js';
 import { decryptSecret } from '../../utils/encryption.js';
 import {
   extractPhoneNumberId,
+  inboundErrorText,
   inboundMessageText,
   normalizeInboundPhone,
   normalizeReferral,
@@ -22,6 +23,7 @@ import { autoAssignChat } from '../chat/lead-assignment.service.js';
 import { matchProductForLead } from '../product/product.service.js';
 import { runAutoResponsesForInbound } from '../automation/auto-response.service.js';
 import { ingestInboundMedia } from '../media/inbound-media.service.js';
+import { WebhookLogModel } from './webhook-log.model.js';
 
 type MetaConfigLean = {
   companyId: Types.ObjectId;
@@ -251,6 +253,29 @@ export async function metaWhatsappWebhook(req: Request, res: Response): Promise<
 
           const attachmentId =
             m.image?.id ?? m.video?.id ?? m.audio?.id ?? m.document?.id ?? m.sticker?.id;
+          const inboundError = inboundErrorText(m);
+
+          // Meta relays some WhatsApp features as type "unsupported" with no content.
+          // Keep the raw payload so the specific feature is identifiable later — the
+          // placeholder alone leaves nothing to diagnose from.
+          if (inboundError || m.type === 'unsupported') {
+            try {
+              await WebhookLogModel.create({
+                companyId: new Types.ObjectId(companyId),
+                provider: 'meta',
+                path: req.path,
+                payload: { messageType: m.type, message: m, contacts: value.contacts },
+                signatureValid: signatureOk,
+              });
+            } catch (logErr) {
+              logger.warn('Could not store unsupported-message payload', { err: logErr });
+            }
+            logger.warn('Meta inbound: unsupported message type', {
+              companyId,
+              messageType: m.type,
+              reason: inboundError,
+            });
+          }
 
           const msg = await MessageModel.create({
             companyId: new Types.ObjectId(companyId),
@@ -259,6 +284,7 @@ export async function metaWhatsappWebhook(req: Request, res: Response): Promise<
             body,
             messageType: m.type ?? 'text',
             status: 'delivered',
+            statusDetail: inboundError,
             twilioSid: sid || undefined,
             referral,
             metaMediaId: attachmentId,
