@@ -284,16 +284,35 @@ async function loadOutboundMedia(
  * one; after that the workspace must use an approved template. The composer shows this
  * so an agent is not left guessing why a reply bounced.
  */
-export function serviceWindow(lastInboundAt?: Date | null): {
+export function serviceWindow(input: {
+  lastInboundAt?: Date | null;
+  /** Whether the contact has ever written in, even if we did not record when. */
+  everInbound: boolean;
+}): {
+  /** False only when we can prove the window is shut. */
   open: boolean;
+  /** False when `lastInboundAt` is missing — the UI must not claim either way. */
+  known: boolean;
   expiresAt: string | null;
   minutesLeft: number;
 } {
-  if (!lastInboundAt) return { open: false, expiresAt: null, minutesLeft: 0 };
-  const expires = new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000);
+  if (!input.lastInboundAt) {
+    // Two different unknowns. A contact who has never written cannot be reached with
+    // free text at all, which we do know. A conversation that predates this field has
+    // a window we cannot compute — blocking the composer on that guess would freeze
+    // every existing chat until the contact happened to write again.
+    return {
+      open: false,
+      known: !input.everInbound,
+      expiresAt: null,
+      minutesLeft: 0,
+    };
+  }
+  const expires = new Date(input.lastInboundAt.getTime() + 24 * 60 * 60 * 1000);
   const minutesLeft = Math.floor((expires.getTime() - Date.now()) / 60000);
   return {
     open: minutesLeft > 0,
+    known: true,
     expiresAt: expires.toISOString(),
     minutesLeft: Math.max(0, minutesLeft),
   };
@@ -533,7 +552,13 @@ export async function getChatDetail(companyId: string, chatId: string) {
 
   const chat = (await ChatModel.findOne({ _id: chatOid, companyId: companyOid, deletedAt: null })
     .populate('contactId', 'name phone email tags')
-    .lean()) as unknown as (ChatListRow & { lastInboundAt?: Date; contactId?: { _id: Types.ObjectId } }) | null;
+    .lean()) as unknown as
+    | (ChatListRow & {
+        lastInboundAt?: Date;
+        firstInboundAt?: Date;
+        contactId?: { _id: Types.ObjectId };
+      })
+    | null;
   if (!chat) throw new ChatAccessError('Chat not found', 404);
 
   const contactOid = chat.contactId?._id;
@@ -555,7 +580,10 @@ export async function getChatDetail(companyId: string, chatId: string) {
 
   return {
     chat: decorated,
-    serviceWindow: serviceWindow(chat.lastInboundAt ?? null),
+    serviceWindow: serviceWindow({
+      lastInboundAt: chat.lastInboundAt ?? null,
+      everInbound: Boolean(chat.firstInboundAt),
+    }),
     groups: groups.map((g) => ({ _id: String(g._id), name: g.name })),
     activity,
   };
