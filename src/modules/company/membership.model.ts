@@ -9,6 +9,11 @@ const membershipSchema = new Schema(
     userId: { type: Schema.Types.ObjectId, ref: 'User', required: true, index: true },
     companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
     role: { type: String, enum: MEMBERSHIP_ROLES, required: true },
+    /**
+     * Whether the round-robin includes this member. Admins switch it off to take an
+     * agent out of rotation (leave, training) without removing them from the company.
+     */
+    availableForLeads: { type: Boolean, default: true },
     inviteTokenHash: { type: String },
     inviteExpires: { type: Date },
     deletedAt: { type: Date },

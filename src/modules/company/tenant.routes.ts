@@ -16,6 +16,8 @@ import * as templateCtrl from '../template/template.controller.js';
 import * as chatCtrl from '../chat/chat.controller.js';
 import * as mediaCtrl from '../media/media.controller.js';
 import * as walletCtrl from '../wallet/wallet.controller.js';
+import * as productCtrl from '../product/product.controller.js';
+import * as autoCtrl from '../automation/auto-response.controller.js';
 import { companyValidation } from './company.validation.js';
 import { twilioValidation } from '../twilio/twilio.validation.js';
 import { contactValidation } from '../contact/contact.validation.js';
@@ -25,6 +27,8 @@ import { chatValidation } from '../chat/chat.validation.js';
 import { mediaValidation } from '../media/media.validation.js';
 import { metaValidation } from '../meta/meta.validation.js';
 import { crmBridgeValidation } from '../crm/crm-bridge.validation.js';
+import { productValidation } from '../product/product.validation.js';
+import { autoResponseValidation } from '../automation/auto-response.validation.js';
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -39,6 +43,32 @@ export function createTenantRouter(): Router {
   tenant.get('/activity-logs', asyncHandler(activityCtrl.listActivityLogs));
 
   tenant.get('/team', asyncHandler(companyCtrl.listTeam));
+  /** Creates the login and the membership in one step — no prior registration needed. */
+  tenant.post(
+    '/team/users',
+    requireCompanyAdmin,
+    validateRequest({ body: companyValidation.createUser }),
+    asyncHandler(companyCtrl.createUser),
+  );
+  tenant.patch(
+    '/team/members/:id',
+    requireCompanyAdmin,
+    validateRequest(companyValidation.updateMember),
+    asyncHandler(companyCtrl.patchMember),
+  );
+  tenant.delete(
+    '/team/members/:id',
+    requireCompanyAdmin,
+    validateRequest(companyValidation.memberById),
+    asyncHandler(companyCtrl.deleteMember),
+  );
+  tenant.post(
+    '/team/members/:id/password',
+    requireCompanyAdmin,
+    validateRequest(companyValidation.resetMemberPassword),
+    asyncHandler(companyCtrl.resetMemberPassword),
+  );
+  /** Legacy path: attach an account that already exists. */
   tenant.post(
     '/team/invite',
     requireCompanyAdmin,
@@ -190,11 +220,24 @@ export function createTenantRouter(): Router {
     asyncHandler(templateCtrl.deleteTemplate),
   );
 
-  tenant.get('/chats', asyncHandler(chatCtrl.getChats));
+  tenant.get(
+    '/chats',
+    validateRequest({ query: chatValidation.listQuery }),
+    asyncHandler(chatCtrl.getChats),
+  );
+  tenant.get('/leads/counts', asyncHandler(chatCtrl.getLeadCounts));
+  /** Who the round-robin would consider, with each member's current load. */
+  tenant.get('/leads/assignees', requireCompanyAdmin, asyncHandler(chatCtrl.getAssignmentCandidates));
+  tenant.post('/leads/distribute', requireCompanyAdmin, asyncHandler(chatCtrl.postDistributeLeads));
   tenant.post(
     '/chats',
     validateRequest(chatValidation.createChat),
     asyncHandler(chatCtrl.createChat),
+  );
+  tenant.get(
+    '/chats/:chatId',
+    validateRequest({ params: chatValidation.messagesParams }),
+    asyncHandler(chatCtrl.getChatDetailCtrl),
   );
   tenant.get(
     '/chats/:chatId/messages',
@@ -209,10 +252,42 @@ export function createTenantRouter(): Router {
     validateRequest({ params: chatValidation.messagesParams }),
     asyncHandler(chatCtrl.markRead),
   );
+  tenant.patch(
+    '/chats/:chatId/tags',
+    validateRequest(chatValidation.updateTags),
+    asyncHandler(chatCtrl.patchContactTags),
+  );
   tenant.post(
     '/chats/:chatId/messages',
     validateRequest(chatValidation.postMessage),
     asyncHandler(chatCtrl.postMessage),
+  );
+  tenant.patch(
+    '/chats/:chatId/status',
+    validateRequest(chatValidation.updateStatus),
+    asyncHandler(chatCtrl.patchLeadStatus),
+  );
+  /** Admin-only: an agent must not be able to pull a lead off a colleague. */
+  tenant.patch(
+    '/chats/:chatId/assignment',
+    requireCompanyAdmin,
+    validateRequest(chatValidation.updateAssignment),
+    asyncHandler(chatCtrl.patchAssignment),
+  );
+  tenant.get(
+    '/chats/:chatId/notes',
+    validateRequest({ params: chatValidation.messagesParams }),
+    asyncHandler(chatCtrl.getChatNotes),
+  );
+  tenant.post(
+    '/chats/:chatId/notes',
+    validateRequest(chatValidation.addNote),
+    asyncHandler(chatCtrl.postChatNote),
+  );
+  tenant.delete(
+    '/chats/:chatId/notes/:noteId',
+    validateRequest(chatValidation.noteParams),
+    asyncHandler(chatCtrl.removeChatNote),
   );
 
   tenant.post(
@@ -220,7 +295,85 @@ export function createTenantRouter(): Router {
     validateRequest({ body: mediaValidation.presign }),
     asyncHandler(mediaCtrl.presignUpload),
   );
+  tenant.post(
+    '/media/:id/complete',
+    validateRequest(mediaValidation.complete),
+    asyncHandler(mediaCtrl.completeUpload),
+  );
+  tenant.get(
+    '/media/:id/url',
+    validateRequest(mediaValidation.byId),
+    asyncHandler(mediaCtrl.getMediaUrl),
+  );
   tenant.get('/media', asyncHandler(mediaCtrl.listMedia));
+
+  /* ------------------------------------------------------- quick replies */
+
+  tenant.get('/quick-replies', asyncHandler(chatCtrl.getQuickReplies));
+  tenant.post(
+    '/quick-replies',
+    validateRequest({ body: chatValidation.createQuickReply }),
+    asyncHandler(chatCtrl.postQuickReply),
+  );
+  tenant.patch(
+    '/quick-replies/:id',
+    validateRequest(chatValidation.updateQuickReply),
+    asyncHandler(chatCtrl.patchQuickReply),
+  );
+  tenant.delete(
+    '/quick-replies/:id',
+    requireCompanyAdmin,
+    validateRequest(chatValidation.quickReplyById),
+    asyncHandler(chatCtrl.removeQuickReply),
+  );
+
+  /* ----------------------------------------------- products & automation */
+
+  tenant.get('/products', asyncHandler(productCtrl.getProducts));
+  tenant.post(
+    '/products',
+    requireCompanyAdmin,
+    validateRequest({ body: productValidation.create }),
+    asyncHandler(productCtrl.postProduct),
+  );
+  tenant.patch(
+    '/products/:id',
+    requireCompanyAdmin,
+    validateRequest(productValidation.update),
+    asyncHandler(productCtrl.patchProduct),
+  );
+  tenant.delete(
+    '/products/:id',
+    requireCompanyAdmin,
+    validateRequest(productValidation.byId),
+    asyncHandler(productCtrl.removeProduct),
+  );
+
+  tenant.get('/auto-responses', requireCompanyAdmin, asyncHandler(autoCtrl.getAutoResponses));
+  tenant.post(
+    '/auto-responses',
+    requireCompanyAdmin,
+    validateRequest({ body: autoResponseValidation.create }),
+    asyncHandler(autoCtrl.postAutoResponse),
+  );
+  tenant.patch(
+    '/auto-responses/:id',
+    requireCompanyAdmin,
+    validateRequest(autoResponseValidation.update),
+    asyncHandler(autoCtrl.patchAutoResponse),
+  );
+  tenant.delete(
+    '/auto-responses/:id',
+    requireCompanyAdmin,
+    validateRequest(autoResponseValidation.byId),
+    asyncHandler(autoCtrl.removeAutoResponse),
+  );
+  tenant.post(
+    '/auto-responses/preview',
+    requireCompanyAdmin,
+    validateRequest({ body: autoResponseValidation.preview }),
+    asyncHandler(autoCtrl.postAutoResponsePreview),
+  );
 
   tenant.get('/wallet', asyncHandler(walletCtrl.getWalletCtrl));
   tenant.get('/wallet/transactions', asyncHandler(walletCtrl.listTransactions));

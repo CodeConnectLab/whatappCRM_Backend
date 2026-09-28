@@ -12,6 +12,8 @@ export async function getMeProfile(userId: string) {
     email: userDoc.email,
     name: userDoc.name,
     isSuperAdmin: Boolean(userDoc.isSuperAdmin),
+    // Drives the "pick your own password" prompt for admin-created accounts.
+    mustChangePassword: Boolean(userDoc.mustChangePassword),
   };
 
   const membershipsRaw = await MembershipModel.find({

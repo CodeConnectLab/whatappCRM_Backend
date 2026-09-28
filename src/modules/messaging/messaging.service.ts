@@ -9,6 +9,10 @@ export async function sendWhatsappMessage(input: {
   toPhone: string;
   body: string;
   mediaUrl?: string[];
+  /** WhatsApp bucket for the attachment. Ignored by Twilio, which sniffs the type itself. */
+  mediaKind?: 'image' | 'video' | 'audio' | 'document' | 'sticker';
+  /** Filename shown to the recipient on a document send. */
+  filename?: string;
 }): Promise<{ sid: string }> {
   const wa = await WhatsappNumberModel.findOne({
     _id: new Types.ObjectId(input.whatsappNumberId),
@@ -25,6 +29,8 @@ export async function sendWhatsappMessage(input: {
       toPhone: input.toPhone,
       body: input.body,
       mediaUrl: input.mediaUrl,
+      ...(input.mediaKind ? { mediaKind: input.mediaKind } : {}),
+      ...(input.filename ? { filename: input.filename } : {}),
     });
   }
 

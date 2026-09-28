@@ -13,6 +13,10 @@ export const authValidation = {
   }),
   refresh: z.object({ refreshToken: z.string().min(10) }),
   forgotPassword: z.object({ email: z.string().email() }),
+  changePassword: z.object({
+    currentPassword: z.string().min(1),
+    password: z.string().min(8).max(128),
+  }),
   resetPassword: z.object({
     token: z.string().min(10),
     password: z.string().min(8),

@@ -3,6 +3,27 @@ import { getModel } from '../../utils/registerModel.js';
 
 export const CRM_SYNC_STATUSES = ['pending', 'synced', 'duplicate', 'skipped', 'failed'] as const;
 
+/** Pipeline stage of the conversation as a sales lead. */
+export const LEAD_STATUSES = ['new', 'in_progress', 'qualified', 'won', 'lost'] as const;
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
+
+/** Stages that still need an agent's attention — the basis of the round-robin load. */
+export const OPEN_LEAD_STATUSES = ['new', 'in_progress', 'qualified'] as const;
+
+export const ASSIGNMENT_METHODS = ['auto', 'manual', 'self'] as const;
+
+/**
+ * Matcher for "still needs attention".
+ *
+ * `null` is in the list on purpose: conversations that predate the lead pipeline carry
+ * no `status` at all, and `$in: [null]` matches a missing field. Without it every
+ * existing chat would look closed — invisible to the round-robin, the counts and the
+ * distribute button alike.
+ */
+export const openLeadStatusFilter = (): { $in: (string | null)[] } => ({
+  $in: [...OPEN_LEAD_STATUSES, null],
+});
+
 /**
  * First-touch ad attribution for the whole conversation.
  *
@@ -34,11 +55,29 @@ const chatSchema = new Schema(
     lastMessageAt: { type: Date },
     lastMessagePreview: { type: String },
     unreadCount: { type: Number, default: 0 },
+    /** Agent who owns this lead. Set by the round-robin on first contact. */
+    assignedTo: { type: Schema.Types.ObjectId, ref: 'User' },
+    assignedAt: { type: Date },
+    assignedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    assignmentMethod: { type: String, enum: ASSIGNMENT_METHODS },
+    status: { type: String, enum: LEAD_STATUSES, default: 'new' },
+    /** Product the lead was matched to (by ad id or keyword) — drives auto-responses. */
+    productId: { type: Schema.Types.ObjectId, ref: 'Product' },
+    /** Last time an agent (not an automation) replied — used by follow-up rules. */
+    lastAgentReplyAt: { type: Date },
     /** Ad/post this conversation originated from, captured once at first contact. */
     referral: { type: chatReferralSchema, default: undefined },
     /** Text of the very first inbound message — the lead's own words, pushed to the CRM. */
     firstInboundMessage: { type: String, trim: true },
     firstInboundAt: { type: Date },
+    /**
+     * Last message *from the contact*.
+     *
+     * WhatsApp only allows free-form replies within 24 hours of this; after that the
+     * workspace must use an approved template. Storing it on the chat lets the composer
+     * show the remaining window without walking the message log.
+     */
+    lastInboundAt: { type: Date },
     /** Outcome of the push to the external CRM; absent when the bridge is off. */
     crmSyncStatus: { type: String, enum: CRM_SYNC_STATUSES },
     crmLeadId: { type: String, trim: true },
@@ -52,6 +91,9 @@ const chatSchema = new Schema(
 
 chatSchema.index({ companyId: 1, contactId: 1, whatsappNumberId: 1 }, { unique: true, partialFilterExpression: { deletedAt: null } });
 chatSchema.index({ companyId: 1, lastMessageAt: -1 });
+/** The agent inbox query: "my leads, newest first". */
+chatSchema.index({ companyId: 1, assignedTo: 1, lastMessageAt: -1 });
+chatSchema.index({ companyId: 1, status: 1, lastMessageAt: -1 });
 /** Retry sweeps and "which leads failed to reach the CRM" views. */
 chatSchema.index(
   { companyId: 1, crmSyncStatus: 1 },
