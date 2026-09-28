@@ -24,10 +24,19 @@ export const chatValidation = {
         body: z.string().max(4096).optional(),
         /** Attachment uploaded through /media/presign. */
         mediaId: objectId.optional(),
+        /** Approved template — the only thing deliverable outside the 24-hour window. */
+        templateId: objectId.optional(),
+        /** Canned reply the text came from, for the picker's usage ordering. */
+        quickReplyId: objectId.optional(),
       })
-      // A message needs text, an attachment, or both — never neither.
-      .refine((v) => Boolean(v.body?.trim()) || Boolean(v.mediaId), {
-        message: 'Provide a message body or an attachment',
+      // A message needs text, an attachment or a template — never nothing at all.
+      .refine((v) => Boolean(v.body?.trim()) || Boolean(v.mediaId) || Boolean(v.templateId), {
+        message: 'Provide a message body, an attachment or a template',
+      })
+      // A template renders its own body from the approved copy, so free-form text or a
+      // separate attachment alongside it would silently be dropped.
+      .refine((v) => !v.templateId || (!v.body?.trim() && !v.mediaId), {
+        message: 'A template is sent on its own — clear the message box and any attachment',
       }),
   },
   createChat: {
@@ -50,5 +59,27 @@ export const chatValidation = {
   },
   noteParams: {
     params: z.object({ chatId: objectId, noteId: objectId }),
+  },
+  updateTags: {
+    params: z.object({ chatId: objectId }),
+    body: z.object({ tags: z.array(z.string().trim().min(1).max(40)).max(20) }),
+  },
+  createQuickReply: z.object({
+    title: z.string().trim().min(1).max(120),
+    body: z.string().min(1).max(4096),
+    shortcut: z.string().trim().max(40).optional(),
+    mediaId: objectId.optional(),
+  }),
+  updateQuickReply: {
+    params: z.object({ id: objectId }),
+    body: z.object({
+      title: z.string().trim().min(1).max(120).optional(),
+      body: z.string().min(1).max(4096).optional(),
+      shortcut: z.string().trim().max(40).nullable().optional(),
+      mediaId: objectId.nullable().optional(),
+    }),
+  },
+  quickReplyById: {
+    params: z.object({ id: objectId }),
   },
 };

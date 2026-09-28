@@ -70,6 +70,14 @@ const chatSchema = new Schema(
     /** Text of the very first inbound message — the lead's own words, pushed to the CRM. */
     firstInboundMessage: { type: String, trim: true },
     firstInboundAt: { type: Date },
+    /**
+     * Last message *from the contact*.
+     *
+     * WhatsApp only allows free-form replies within 24 hours of this; after that the
+     * workspace must use an approved template. Storing it on the chat lets the composer
+     * show the remaining window without walking the message log.
+     */
+    lastInboundAt: { type: Date },
     /** Outcome of the push to the external CRM; absent when the bridge is off. */
     crmSyncStatus: { type: String, enum: CRM_SYNC_STATUSES },
     crmLeadId: { type: String, trim: true },

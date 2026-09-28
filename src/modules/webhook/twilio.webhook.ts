@@ -97,6 +97,8 @@ export async function twilioIncomingController(req: Request, res: Response): Pro
     const chatUpdate: Record<string, unknown> = {
       lastMessageAt: new Date(),
       lastMessagePreview: preview.slice(0, 140),
+      // Restarts the 24-hour window in which free-form replies are allowed.
+      lastInboundAt: new Date(),
     };
     if (isFirstInbound) {
       chatUpdate.firstInboundMessage = preview;

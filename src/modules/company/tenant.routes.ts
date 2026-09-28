@@ -235,12 +235,27 @@ export function createTenantRouter(): Router {
     asyncHandler(chatCtrl.createChat),
   );
   tenant.get(
+    '/chats/:chatId',
+    validateRequest({ params: chatValidation.messagesParams }),
+    asyncHandler(chatCtrl.getChatDetailCtrl),
+  );
+  tenant.get(
     '/chats/:chatId/messages',
     validateRequest({
       params: chatValidation.messagesParams,
       query: chatValidation.messagesQuery,
     }),
     asyncHandler(chatCtrl.getMessages),
+  );
+  tenant.post(
+    '/chats/:chatId/read',
+    validateRequest({ params: chatValidation.messagesParams }),
+    asyncHandler(chatCtrl.markRead),
+  );
+  tenant.patch(
+    '/chats/:chatId/tags',
+    validateRequest(chatValidation.updateTags),
+    asyncHandler(chatCtrl.patchContactTags),
   );
   tenant.post(
     '/chats/:chatId/messages',
@@ -291,6 +306,26 @@ export function createTenantRouter(): Router {
     asyncHandler(mediaCtrl.getMediaUrl),
   );
   tenant.get('/media', asyncHandler(mediaCtrl.listMedia));
+
+  /* ------------------------------------------------------- quick replies */
+
+  tenant.get('/quick-replies', asyncHandler(chatCtrl.getQuickReplies));
+  tenant.post(
+    '/quick-replies',
+    validateRequest({ body: chatValidation.createQuickReply }),
+    asyncHandler(chatCtrl.postQuickReply),
+  );
+  tenant.patch(
+    '/quick-replies/:id',
+    validateRequest(chatValidation.updateQuickReply),
+    asyncHandler(chatCtrl.patchQuickReply),
+  );
+  tenant.delete(
+    '/quick-replies/:id',
+    requireCompanyAdmin,
+    validateRequest(chatValidation.quickReplyById),
+    asyncHandler(chatCtrl.removeQuickReply),
+  );
 
   /* ----------------------------------------------- products & automation */
 

@@ -2,6 +2,9 @@ import { Types } from 'mongoose';
 import { ChatModel, openLeadStatusFilter, type LeadStatus } from './chat.model.js';
 import { ChatNoteModel } from './chat-note.model.js';
 import { ContactModel } from '../contact/contact.model.js';
+import { ContactGroupModel } from '../contact/contact-group.model.js';
+import { ActivityLogModel } from '../activity/activity-log.model.js';
+import { logActivity } from '../activity/activity.service.js';
 import { MessageModel } from './message.model.js';
 import { MediaModel } from '../media/media.model.js';
 import { WhatsappNumberModel } from '../twilio/whatsapp-number.model.js';
@@ -9,7 +12,11 @@ import { UserModel } from '../user/user.model.js';
 import { ProductModel } from '../product/product.model.js';
 import { emitToCompany } from '../../socket/io.js';
 import { debitCredits, getCreditPerMessage } from '../wallet/wallet.service.js';
-import { sendWhatsappMessage } from '../messaging/messaging.service.js';
+import { sendWhatsappMessage, sendWhatsappTemplateMessage } from '../messaging/messaging.service.js';
+import { TemplateModel } from '../template/template.model.js';
+import { buildParameterValues, type TemplateVariable } from '../template/template.service.js';
+import { applyTemplate } from '../../utils/templateRender.js';
+import { recordQuickReplyUse } from './quick-reply.service.js';
 import { presignGet } from '../media/s3.service.js';
 import { deliverableKind, assertWithinSizeLimit, type MediaKind } from '../media/media-kind.js';
 import { isS3MediaConfigured } from '../../config/env.js';
@@ -270,12 +277,36 @@ async function loadOutboundMedia(
  * `userId` is null for automations: the message is still logged and billed, but it is
  * flagged so the inbox can label it and so a bot reply never counts as an agent touch.
  */
+/**
+ * How long the contact's 24-hour service window has left.
+ *
+ * WhatsApp only delivers a free-form message within 24 hours of the contact's last
+ * one; after that the workspace must use an approved template. The composer shows this
+ * so an agent is not left guessing why a reply bounced.
+ */
+export function serviceWindow(lastInboundAt?: Date | null): {
+  open: boolean;
+  expiresAt: string | null;
+  minutesLeft: number;
+} {
+  if (!lastInboundAt) return { open: false, expiresAt: null, minutesLeft: 0 };
+  const expires = new Date(lastInboundAt.getTime() + 24 * 60 * 60 * 1000);
+  const minutesLeft = Math.floor((expires.getTime() - Date.now()) / 60000);
+  return {
+    open: minutesLeft > 0,
+    expiresAt: expires.toISOString(),
+    minutesLeft: Math.max(0, minutesLeft),
+  };
+}
+
 export async function sendOutboundChatMessage(input: {
   companyId: string;
   userId: string | null;
   chatId: string;
   body: string;
   mediaId?: string;
+  /** Canned reply the text came from, so the picker can order by what gets used. */
+  quickReplyId?: string;
   automation?: { ruleId: string };
 }) {
   const chat = await ChatModel.findOne({
@@ -359,6 +390,13 @@ export async function sendOutboundChatMessage(input: {
     }
     await ChatModel.updateOne({ _id: chat._id }, { $set: chatUpdate });
 
+    if (input.quickReplyId) {
+      // Best effort: a counter that failed to increment must not fail a delivered message.
+      await recordQuickReplyUse(input.companyId, input.quickReplyId).catch((err: unknown) =>
+        logger.warn('Quick reply use counter failed', { err }),
+      );
+    }
+
     const updated = await MessageModel.findById(msgDoc._id).lean();
     const [serialized] = await serializeMessages([updated as unknown as StoredMessage]);
     emitToCompany(input.companyId, 'message:new', { chatId: input.chatId, message: serialized });
@@ -376,6 +414,182 @@ export async function sendOutboundChatMessage(input: {
     );
     throw e;
   }
+}
+
+/**
+ * Sends an approved template into an existing conversation.
+ *
+ * This is the only thing WhatsApp delivers once the 24-hour service window has closed,
+ * so it is what the composer falls back to. A template that Meta has not approved is
+ * refused here with its own status rather than being sent and silently failing.
+ */
+export async function sendChatTemplateMessage(input: {
+  companyId: string;
+  userId: string;
+  chatId: string;
+  templateId: string;
+}) {
+  const companyOid = new Types.ObjectId(input.companyId);
+
+  const chat = await ChatModel.findOne({
+    _id: new Types.ObjectId(input.chatId),
+    companyId: companyOid,
+    deletedAt: null,
+  }).lean();
+  if (!chat) throw new Error('Chat not found');
+
+  const [contact, template] = await Promise.all([
+    ContactModel.findById(chat.contactId).lean(),
+    TemplateModel.findOne({
+      _id: new Types.ObjectId(input.templateId),
+      companyId: companyOid,
+      deletedAt: null,
+    }).lean(),
+  ]);
+  if (!contact) throw new Error('Contact not found');
+  if (!template) throw new Error('Template not found');
+  if (template.status !== 'APPROVED') {
+    throw new Error(
+      `“${template.name}” is ${template.status ?? 'not approved'} — only approved templates can be sent`,
+    );
+  }
+
+  const variables = (template.variables ?? []) as TemplateVariable[];
+  const renderedBody = applyTemplate(template.body, contact);
+
+  const msgDoc = await MessageModel.create({
+    companyId: companyOid,
+    chatId: new Types.ObjectId(input.chatId),
+    direction: 'outbound',
+    body: renderedBody,
+    messageType: 'template',
+    status: 'queued',
+    senderUserId: new Types.ObjectId(input.userId),
+  });
+
+  try {
+    const { sid } = await sendWhatsappTemplateMessage({
+      companyId: input.companyId,
+      whatsappNumberId: String(chat.whatsappNumberId),
+      toPhone: contact.phone,
+      templateName: template.metaTemplateName ?? template.name,
+      language: template.language ?? 'en',
+      parameters: buildParameterValues(variables, contact),
+      renderedBody,
+      ...(template.imageUrl ? { headerImageUrl: template.imageUrl } : {}),
+    });
+
+    await MessageModel.updateOne(
+      { _id: msgDoc._id },
+      { $set: { status: 'sent', twilioSid: sid }, $unset: { statusDetail: '' } },
+    );
+
+    try {
+      await debitCredits(input.companyId, getCreditPerMessage(), 'chat_template', {
+        messageId: String(msgDoc._id),
+      });
+    } catch (debitErr) {
+      logger.error('Chat template sent but wallet debit failed', { err: debitErr });
+    }
+
+    await ChatModel.updateOne(
+      { _id: chat._id },
+      {
+        $set: {
+          lastMessageAt: new Date(),
+          lastMessagePreview: renderedBody.slice(0, 140),
+          lastAgentReplyAt: new Date(),
+          ...(chat.status === 'new' ? { status: 'in_progress' } : {}),
+        },
+      },
+    );
+
+    const updated = await MessageModel.findById(msgDoc._id).lean();
+    const [serialized] = await serializeMessages([updated as unknown as StoredMessage]);
+    emitToCompany(input.companyId, 'message:new', { chatId: input.chatId, message: serialized });
+    return serialized;
+  } catch (e) {
+    await MessageModel.updateOne(
+      { _id: msgDoc._id, twilioSid: { $exists: false } },
+      {
+        $set: {
+          status: 'failed',
+          statusDetail: e instanceof Error ? e.message : 'template send failed',
+        },
+      },
+    );
+    throw e;
+  }
+}
+
+/**
+ * Everything the details rail shows for one conversation: the decorated chat, how much
+ * of the service window is left, the contact's groups, and the trail of what happened
+ * to this lead. One call rather than five, because the rail opens as a unit.
+ */
+export async function getChatDetail(companyId: string, chatId: string) {
+  const companyOid = new Types.ObjectId(companyId);
+  const chatOid = new Types.ObjectId(chatId);
+
+  const chat = (await ChatModel.findOne({ _id: chatOid, companyId: companyOid, deletedAt: null })
+    .populate('contactId', 'name phone email tags')
+    .lean()) as unknown as (ChatListRow & { lastInboundAt?: Date; contactId?: { _id: Types.ObjectId } }) | null;
+  if (!chat) throw new ChatAccessError('Chat not found', 404);
+
+  const contactOid = chat.contactId?._id;
+
+  const [groups, activity] = await Promise.all([
+    contactOid
+      ? ContactGroupModel.find({ companyId: companyOid, contactIds: contactOid, deletedAt: null })
+          .select('name')
+          .lean()
+      : Promise.resolve([]),
+    ActivityLogModel.find({ companyId: companyOid, resource: 'chat', resourceId: chatOid })
+      .sort({ createdAt: -1 })
+      .limit(12)
+      .populate('userId', 'name email')
+      .lean(),
+  ]);
+
+  const [decorated] = await decorateChats([chat]);
+
+  return {
+    chat: decorated,
+    serviceWindow: serviceWindow(chat.lastInboundAt ?? null),
+    groups: groups.map((g) => ({ _id: String(g._id), name: g.name })),
+    activity,
+  };
+}
+
+/** Replaces the contact's tag list — the "+ Add" chip in the details rail. */
+export async function setContactTags(input: {
+  companyId: string;
+  chatId: string;
+  tags: string[];
+}): Promise<string[]> {
+  const chat = await ChatModel.findOne({
+    _id: new Types.ObjectId(input.chatId),
+    companyId: new Types.ObjectId(input.companyId),
+    deletedAt: null,
+  })
+    .select('contactId')
+    .lean();
+  if (!chat) throw new ChatAccessError('Chat not found', 404);
+
+  // Trimmed, de-duplicated and case-insensitively unique, so "Delhi" and "delhi" do not
+  // both end up on the contact.
+  const seen = new Set<string>();
+  const tags: string[] = [];
+  for (const raw of input.tags) {
+    const tag = raw.trim();
+    const key = tag.toLowerCase();
+    if (!tag || seen.has(key)) continue;
+    seen.add(key);
+    tags.push(tag);
+  }
+
+  await ContactModel.updateOne({ _id: chat.contactId }, { $set: { tags } });
+  return tags;
 }
 
 /* ---------------------------------------------------------------- lead ops */
@@ -397,14 +611,40 @@ export async function updateLeadStatus(input: {
   ).lean();
   if (!res) throw new ChatAccessError('Chat not found', 404);
   emitToCompany(input.companyId, 'lead:status', { chatId: input.chatId, status: input.status });
+  // Feeds the "recent activity" trail in the details rail.
+  await logActivity({
+    companyId: input.companyId,
+    userId: input.actorUserId,
+    action: 'lead.status_changed',
+    resource: 'chat',
+    resourceId: input.chatId,
+    meta: { status: input.status },
+  });
   return res;
 }
 
+/**
+ * Clear a conversation's unread badge.
+ *
+ * The counter was only ever incremented by the inbound webhooks and had nothing to
+ * reset it, so every chat ever opened stayed unread and the workspace total climbed
+ * past the number of conversations.
+ */
 export async function markChatRead(companyId: string, chatId: string): Promise<void> {
-  await ChatModel.updateOne(
-    { _id: new Types.ObjectId(chatId), companyId: new Types.ObjectId(companyId) },
+  const res = await ChatModel.updateOne(
+    {
+      _id: new Types.ObjectId(chatId),
+      companyId: new Types.ObjectId(companyId),
+      deletedAt: null,
+      unreadCount: { $gt: 0 },
+    },
     { $set: { unreadCount: 0 } },
   );
+  // Only announce a real change, so opening an already-read chat does not churn
+  // every other agent's inbox.
+  if (res.modifiedCount > 0) {
+    emitToCompany(companyId, 'chat:read', { chatId, unreadCount: 0 });
+  }
 }
 
 export async function listChatNotes(companyId: string, chatId: string) {

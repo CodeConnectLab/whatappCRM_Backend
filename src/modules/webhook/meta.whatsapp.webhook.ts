@@ -269,6 +269,8 @@ export async function metaWhatsappWebhook(req: Request, res: Response): Promise<
           const chatUpdate: Record<string, unknown> = {
             lastMessageAt: new Date(),
             lastMessagePreview: body.slice(0, 140),
+            // Restarts the 24-hour window in which free-form replies are allowed.
+            lastInboundAt: new Date(),
           };
           // The referral rides only on the opening message of a conversation, so this
           // is the one chance to record which ad produced the lead.
