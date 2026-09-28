@@ -1,5 +1,11 @@
 import type { Request, Response } from 'express';
-import { listChats, listMessages, openChatWithContact, sendOutboundChatMessage } from './chat.service.js';
+import {
+  listChats,
+  listMessages,
+  markChatRead,
+  openChatWithContact,
+  sendOutboundChatMessage,
+} from './chat.service.js';
 
 export async function getChats(req: Request, res: Response): Promise<void> {
   const companyId = req.companyId!;
@@ -54,4 +60,15 @@ export async function postMessage(req: Request, res: Response): Promise<void> {
   } catch (e) {
     res.status(400).json({ error: e instanceof Error ? e.message : 'send failed' });
   }
+}
+
+export async function markRead(req: Request, res: Response): Promise<void> {
+  const companyId = req.companyId!;
+  const { chatId } = req.params as { chatId: string };
+  if (!chatId) {
+    res.status(400).json({ error: 'Missing chat id' });
+    return;
+  }
+  await markChatRead(companyId, chatId);
+  res.json({ ok: true });
 }

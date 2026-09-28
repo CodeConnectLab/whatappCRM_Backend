@@ -33,6 +33,30 @@ export async function listMessages(
   return rows.reverse();
 }
 
+/**
+ * Clear a conversation's unread badge.
+ *
+ * The counter was only ever incremented by the inbound webhooks and had nothing to
+ * reset it, so every chat ever opened stayed unread and the workspace total climbed
+ * past the number of conversations.
+ */
+export async function markChatRead(companyId: string, chatId: string): Promise<void> {
+  const res = await ChatModel.updateOne(
+    {
+      _id: new Types.ObjectId(chatId),
+      companyId: new Types.ObjectId(companyId),
+      deletedAt: null,
+      unreadCount: { $gt: 0 },
+    },
+    { $set: { unreadCount: 0 } },
+  );
+  // Only announce a real change, so opening an already-read chat does not churn
+  // every other agent's inbox.
+  if (res.modifiedCount > 0) {
+    emitToCompany(companyId, 'chat:read', { chatId, unreadCount: 0 });
+  }
+}
+
 export async function sendOutboundChatMessage(input: {
   companyId: string;
   userId: string;

@@ -205,6 +205,11 @@ export function createTenantRouter(): Router {
     asyncHandler(chatCtrl.getMessages),
   );
   tenant.post(
+    '/chats/:chatId/read',
+    validateRequest({ params: chatValidation.messagesParams }),
+    asyncHandler(chatCtrl.markRead),
+  );
+  tenant.post(
     '/chats/:chatId/messages',
     validateRequest(chatValidation.postMessage),
     asyncHandler(chatCtrl.postMessage),
