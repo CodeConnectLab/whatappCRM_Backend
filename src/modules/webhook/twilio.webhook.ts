@@ -9,6 +9,10 @@ import { emitToCompany } from '../../socket/io.js';
 import { logger } from '../../utils/logger.js';
 import { ensureInboundChat } from '../chat/chat.service.js';
 import { ChatModel } from '../chat/chat.model.js';
+import { autoAssignChat } from '../chat/lead-assignment.service.js';
+import { matchProductForLead } from '../product/product.service.js';
+import { runAutoResponsesForInbound } from '../automation/auto-response.service.js';
+import { ingestTwilioInboundMedia } from '../media/inbound-media.service.js';
 
 function validateTwilio(req: Request): boolean {
   if (!env.TWILIO_WEBHOOK_AUTH_TOKEN) return true;
@@ -71,26 +75,78 @@ export async function twilioIncomingController(req: Request, res: Response): Pro
       whatsappNumberId: wa._id,
     });
 
+    const mediaUrl = payload.MediaUrl0;
+    const mediaContentType = payload.MediaContentType0;
+    const preview = body.trim() || (mediaUrl ? '[attachment]' : '');
+
     const msg = await MessageModel.create({
       companyId: new Types.ObjectId(companyId),
       chatId: new Types.ObjectId(chatId),
       direction: 'inbound',
-      body,
+      body: preview,
+      messageType: mediaContentType ? mediaContentType.split('/')[0] : 'text',
       status: 'delivered',
       twilioSid: sid,
     });
 
     const created = await MessageModel.findById(msg._id).lean();
 
+    const existingChat = await ChatModel.findById(chatId).select('firstInboundAt').lean();
+    const isFirstInbound = !existingChat?.firstInboundAt;
+
+    const chatUpdate: Record<string, unknown> = {
+      lastMessageAt: new Date(),
+      lastMessagePreview: preview.slice(0, 140),
+    };
+    if (isFirstInbound) {
+      chatUpdate.firstInboundMessage = preview;
+      chatUpdate.firstInboundAt = new Date();
+    }
+
     await ChatModel.updateOne(
       { _id: chatId },
-      {
-        $set: { lastMessageAt: new Date(), lastMessagePreview: body.slice(0, 140) },
-        $inc: { unreadCount: 1 },
-      },
+      { $set: chatUpdate, $inc: { unreadCount: 1 } },
     );
 
     emitToCompany(companyId, 'message:new', { chatId, message: created });
+
+    // Detached: Twilio also drops a webhook that takes too long to answer.
+    if (mediaUrl) {
+      void ingestTwilioInboundMedia({
+        companyId,
+        chatId,
+        messageId: String(msg._id),
+        mediaUrl,
+        ...(mediaContentType ? { mimeTypeHint: mediaContentType } : {}),
+      }).catch((err: unknown) => {
+        logger.error('Twilio media: unhandled ingest error', { companyId, chatId, err });
+      });
+    }
+
+    void (async () => {
+      if (isFirstInbound) {
+        const product = await matchProductForLead({
+          companyId,
+          messageBody: preview,
+          whatsappNumberId: String(wa._id),
+        });
+        if (product) {
+          await ChatModel.updateOne(
+            { _id: chatId },
+            { $set: { productId: new Types.ObjectId(product.productId) } },
+          );
+        }
+        await autoAssignChat(companyId, chatId);
+      }
+      await runAutoResponsesForInbound({
+        companyId,
+        chatId,
+        messageBody: preview,
+        isFirstInbound,
+      });
+    })().catch((err: unknown) => {
+      logger.error('Twilio lead intake pipeline failed', { companyId, chatId, err });
+    });
 
     res.type('text/xml').send('<Response></Response>');
   } catch (e) {

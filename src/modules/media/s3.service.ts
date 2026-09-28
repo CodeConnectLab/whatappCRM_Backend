@@ -1,4 +1,4 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { env, isS3MediaConfigured } from '../../config/env.js';
 import { randomUUID } from 'crypto';
@@ -42,6 +42,36 @@ export async function presignPut(key: string, contentType: string, expires = 900
     ContentType: contentType,
   });
   return getSignedUrl(client, cmd, { expiresIn: expires });
+}
+
+/**
+ * Short-lived read URL for an object.
+ *
+ * Both the browser and Meta's own fetcher are served from here rather than from a
+ * public bucket: Meta only needs the link for the few seconds it takes to pull the
+ * file, and a signed URL keeps a customer's documents from being world-readable.
+ */
+export async function presignGet(key: string, expires = 3600): Promise<string> {
+  const client = getS3Client();
+  const cmd = new GetObjectCommand({ Bucket: env.S3_BUCKET, Key: key });
+  return getSignedUrl(client, cmd, { expiresIn: expires });
+}
+
+/** Server-side upload — used for attachments pulled off an inbound WhatsApp message. */
+export async function putObject(
+  key: string,
+  body: Buffer,
+  contentType: string,
+): Promise<void> {
+  const client = getS3Client();
+  await client.send(
+    new PutObjectCommand({
+      Bucket: env.S3_BUCKET,
+      Key: key,
+      Body: body,
+      ContentType: contentType,
+    }),
+  );
 }
 
 export function makeMediaKey(companyId: string, filename: string): string {

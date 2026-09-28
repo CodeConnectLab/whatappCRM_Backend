@@ -7,6 +7,9 @@ const mediaSchema = new Schema(
     key: { type: String, required: true },
     url: { type: String, required: true },
     mimeType: { type: String, required: true },
+    filename: { type: String, trim: true },
+    /** 'inbound' for attachments pulled off a WhatsApp message. */
+    source: { type: String, enum: ['upload', 'inbound'], default: 'upload' },
     size: { type: Number, required: true },
     uploadedBy: { type: Schema.Types.ObjectId, ref: 'User' },
     deletedAt: { type: Date },

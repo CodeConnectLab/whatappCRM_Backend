@@ -2,6 +2,7 @@ import { Router } from 'express';
 import rateLimit from 'express-rate-limit';
 import { asyncHandler } from '../../utils/asyncHandler.js';
 import { validateRequest } from '../../middleware/validate.js';
+import { requireAuth } from '../../middleware/auth.js';
 import * as authCtrl from './auth.controller.js';
 import { authValidation } from './auth.validation.js';
 
@@ -26,6 +27,12 @@ export function mountAuthRoutes(api: Router): void {
     '/auth/forgot-password',
     validateRequest({ body: authValidation.forgotPassword }),
     asyncHandler(authCtrl.forgotPassword),
+  );
+  api.post(
+    '/auth/change-password',
+    requireAuth,
+    validateRequest({ body: authValidation.changePassword }),
+    asyncHandler(authCtrl.changePassword),
   );
   api.post(
     '/auth/reset-password',

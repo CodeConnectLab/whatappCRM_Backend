@@ -3,6 +3,15 @@ import { getModel } from '../../utils/registerModel.js';
 
 export const CRM_SYNC_STATUSES = ['pending', 'synced', 'duplicate', 'skipped', 'failed'] as const;
 
+/** Pipeline stage of the conversation as a sales lead. */
+export const LEAD_STATUSES = ['new', 'in_progress', 'qualified', 'won', 'lost'] as const;
+export type LeadStatus = (typeof LEAD_STATUSES)[number];
+
+/** Stages that still need an agent's attention — the basis of the round-robin load. */
+export const OPEN_LEAD_STATUSES = ['new', 'in_progress', 'qualified'] as const;
+
+export const ASSIGNMENT_METHODS = ['auto', 'manual', 'self'] as const;
+
 /**
  * First-touch ad attribution for the whole conversation.
  *
@@ -34,6 +43,16 @@ const chatSchema = new Schema(
     lastMessageAt: { type: Date },
     lastMessagePreview: { type: String },
     unreadCount: { type: Number, default: 0 },
+    /** Agent who owns this lead. Set by the round-robin on first contact. */
+    assignedTo: { type: Schema.Types.ObjectId, ref: 'User' },
+    assignedAt: { type: Date },
+    assignedBy: { type: Schema.Types.ObjectId, ref: 'User' },
+    assignmentMethod: { type: String, enum: ASSIGNMENT_METHODS },
+    status: { type: String, enum: LEAD_STATUSES, default: 'new' },
+    /** Product the lead was matched to (by ad id or keyword) — drives auto-responses. */
+    productId: { type: Schema.Types.ObjectId, ref: 'Product' },
+    /** Last time an agent (not an automation) replied — used by follow-up rules. */
+    lastAgentReplyAt: { type: Date },
     /** Ad/post this conversation originated from, captured once at first contact. */
     referral: { type: chatReferralSchema, default: undefined },
     /** Text of the very first inbound message — the lead's own words, pushed to the CRM. */
@@ -52,6 +71,9 @@ const chatSchema = new Schema(
 
 chatSchema.index({ companyId: 1, contactId: 1, whatsappNumberId: 1 }, { unique: true, partialFilterExpression: { deletedAt: null } });
 chatSchema.index({ companyId: 1, lastMessageAt: -1 });
+/** The agent inbox query: "my leads, newest first". */
+chatSchema.index({ companyId: 1, assignedTo: 1, lastMessageAt: -1 });
+chatSchema.index({ companyId: 1, status: 1, lastMessageAt: -1 });
 /** Retry sweeps and "which leads failed to reach the CRM" views. */
 chatSchema.index(
   { companyId: 1, crmSyncStatus: 1 },

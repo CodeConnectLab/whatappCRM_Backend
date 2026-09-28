@@ -18,6 +18,10 @@ import {
   verifyMetaSignature,
 } from '../meta/meta-webhook.utils.js';
 import { pushChatToCrm } from '../crm/crm-bridge.service.js';
+import { autoAssignChat } from '../chat/lead-assignment.service.js';
+import { matchProductForLead } from '../product/product.service.js';
+import { runAutoResponsesForInbound } from '../automation/auto-response.service.js';
+import { ingestInboundMedia } from '../media/inbound-media.service.js';
 
 type MetaConfigLean = {
   companyId: Types.ObjectId;
@@ -245,6 +249,9 @@ export async function metaWhatsappWebhook(req: Request, res: Response): Promise<
 
           const referral = normalizeReferral(m.referral);
 
+          const attachmentId =
+            m.image?.id ?? m.video?.id ?? m.audio?.id ?? m.document?.id ?? m.sticker?.id;
+
           const msg = await MessageModel.create({
             companyId: new Types.ObjectId(companyId),
             chatId: new Types.ObjectId(chatId),
@@ -254,8 +261,7 @@ export async function metaWhatsappWebhook(req: Request, res: Response): Promise<
             status: 'delivered',
             twilioSid: sid || undefined,
             referral,
-            metaMediaId:
-              m.image?.id ?? m.video?.id ?? m.audio?.id ?? m.document?.id ?? m.sticker?.id,
+            metaMediaId: attachmentId,
           });
 
           const created = await MessageModel.findById(msg._id).lean();
@@ -285,9 +291,78 @@ export async function metaWhatsappWebhook(req: Request, res: Response): Promise<
           );
           emitToCompany(companyId, 'message:new', { chatId, message: created });
 
-          // Hand the lead to the client's CRM once per conversation. Detached on purpose:
-          // Meta retires a webhook that does not answer within seconds, so a slow or down
-          // CRM must never hold up the 200 or the inbox.
+          // Everything below is detached on purpose: Meta retires a webhook that does
+          // not answer within seconds, so a slow CRM, a media download or an
+          // auto-response send must never hold up the 200 or the inbox.
+
+          // Pull the attachment into our own storage. Meta's download URL expires in
+          // minutes, so this is the only chance to keep the file.
+          if (attachmentId) {
+            void ingestInboundMedia({
+              companyId,
+              chatId,
+              messageId: String(msg._id),
+              metaMediaId: attachmentId,
+              ...(m.document?.filename ? { filename: m.document.filename } : {}),
+              ...(m.image?.mime_type ??
+              m.video?.mime_type ??
+              m.audio?.mime_type ??
+              m.document?.mime_type ??
+              m.sticker?.mime_type
+                ? {
+                    mimeTypeHint:
+                      m.image?.mime_type ??
+                      m.video?.mime_type ??
+                      m.audio?.mime_type ??
+                      m.document?.mime_type ??
+                      m.sticker?.mime_type,
+                  }
+                : {}),
+            }).catch((err: unknown) => {
+              logger.error('Inbound media: unhandled ingest error', { companyId, chatId, err });
+            });
+          }
+
+          if (isFirstInbound) {
+            // Order matters: the product is resolved first so the round-robin log and the
+            // auto-response both see it, then the lead gets an owner, then the greeting
+            // goes out naming that owner.
+            void (async () => {
+              const product = await matchProductForLead({
+                companyId,
+                messageBody: body,
+                adSourceId: referral?.sourceId ?? null,
+                adHeadline: referral?.headline ?? null,
+                whatsappNumberId: String(sender._id),
+              });
+              if (product) {
+                await ChatModel.updateOne(
+                  { _id: chatId },
+                  { $set: { productId: new Types.ObjectId(product.productId) } },
+                );
+              }
+              await autoAssignChat(companyId, chatId);
+              await runAutoResponsesForInbound({
+                companyId,
+                chatId,
+                messageBody: body,
+                isFirstInbound: true,
+              });
+            })().catch((err: unknown) => {
+              logger.error('Lead intake pipeline failed', { companyId, chatId, err });
+            });
+          } else {
+            void runAutoResponsesForInbound({
+              companyId,
+              chatId,
+              messageBody: body,
+              isFirstInbound: false,
+            }).catch((err: unknown) => {
+              logger.error('Auto-response: unhandled error', { companyId, chatId, err });
+            });
+          }
+
+          // Hand the lead to the client's CRM once per conversation.
           if (isFirstInbound && !existingChat?.crmSyncStatus) {
             void pushChatToCrm(companyId, chatId).catch((err: unknown) => {
               logger.error('CRM bridge: unhandled push error', { companyId, chatId, err });

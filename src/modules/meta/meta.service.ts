@@ -80,6 +80,10 @@ export async function sendMetaWhatsappMessage(input: {
   toPhone: string;
   body: string;
   mediaUrl?: string[];
+  /** WhatsApp bucket for the attachment; defaults to image for backward compatibility. */
+  mediaKind?: 'image' | 'video' | 'audio' | 'document' | 'sticker';
+  /** Shown to the recipient for document sends. */
+  filename?: string;
 }): Promise<{ sid: string }> {
   const { token } = await loadMetaConfig(input.companyId);
 
@@ -93,13 +97,21 @@ export async function sendMetaWhatsappMessage(input: {
 
   if (input.mediaUrl?.length) {
     const link = input.mediaUrl[0]!;
+    const kind = input.mediaKind ?? 'image';
+    // Only image, video and document carry a caption; audio, voice and sticker do not,
+    // and Meta rejects the whole message if one is attached.
+    const caption = input.body.trim();
+    const captionable = kind === 'image' || kind === 'video' || kind === 'document';
     payload = {
       messaging_product: 'whatsapp',
       recipient_type: 'individual',
       to,
-      type: 'image',
-      image: { link },
-      ...(input.body.trim() ? { caption: input.body } : {}),
+      type: kind,
+      [kind]: {
+        link,
+        ...(captionable && caption ? { caption } : {}),
+        ...(kind === 'document' && input.filename ? { filename: input.filename } : {}),
+      },
     };
   } else {
     payload = {
@@ -345,4 +357,40 @@ export async function deleteMetaTemplate(companyId: string, metaTemplateName: st
     token,
     { method: 'DELETE' },
   );
+}
+
+/**
+ * Pulls an inbound attachment out of WhatsApp.
+ *
+ * Meta hands the webhook only a media id: the real download URL has to be resolved
+ * first and is valid for about five minutes, and the file itself needs the access
+ * token. That is why inbound media has to be copied into our own storage right away —
+ * linking to Meta's URL would leave a chat full of dead images within the hour.
+ */
+export async function downloadMetaMedia(
+  companyId: string,
+  mediaId: string,
+): Promise<{ buffer: Buffer; mimeType: string; size: number }> {
+  const { token } = await loadMetaConfig(companyId);
+
+  const meta = await graphRequest<{
+    url?: string;
+    mime_type?: string;
+    file_size?: number;
+  }>(`${GRAPH_BASE}/${encodeURIComponent(mediaId)}`, token);
+
+  if (!meta.url) throw new Error('Meta did not return a media URL');
+
+  // The lookup is an ordinary Graph call, but the binary fetch must carry the same
+  // bearer token — the URL alone is not enough.
+  const res = await fetch(meta.url, { headers: { Authorization: `Bearer ${token}` } });
+  if (!res.ok) {
+    throw new Error(`Media download failed (${res.status})`);
+  }
+  const buffer = Buffer.from(await res.arrayBuffer());
+  return {
+    buffer,
+    mimeType: meta.mime_type?.split(';')[0]?.trim() || 'application/octet-stream',
+    size: meta.file_size ?? buffer.length,
+  };
 }

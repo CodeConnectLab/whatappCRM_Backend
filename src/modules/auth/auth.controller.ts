@@ -112,6 +112,28 @@ export async function refresh(req: Request, res: Response): Promise<void> {
   }
 }
 
+/**
+ * Lets a signed-in user replace their own password — the exit from the
+ * `mustChangePassword` state an admin-created account starts in.
+ */
+export async function changePassword(req: Request, res: Response): Promise<void> {
+  const { currentPassword, password } = req.body as { currentPassword: string; password: string };
+  const user = await UserModel.findOne({ _id: req.user!.sub, deletedAt: null });
+  if (!user) {
+    res.status(404).json({ error: 'User not found' });
+    return;
+  }
+  const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+  if (!ok) {
+    res.status(400).json({ error: 'Current password is incorrect' });
+    return;
+  }
+  user.passwordHash = await bcrypt.hash(password, 12);
+  user.mustChangePassword = false;
+  await user.save();
+  res.json({ ok: true });
+}
+
 export async function forgotPassword(req: Request, res: Response): Promise<void> {
   const { email } = req.body as { email: string };
   const user = await UserModel.findOne({ email, deletedAt: null });
