@@ -425,8 +425,19 @@ export async function listAutoResponses(companyId: string) {
     .lean();
 }
 
-const OID_FIELDS = ['productId', 'templateId', 'mediaId'] as const;
+/**
+ * Fields an explicit `null` clears. MongoDB refuses a `$set` and a `$unset` on the same
+ * path in one update — it was that overlap, on `businessHours`, that turned every "save
+ * rule" with business hours switched off into a 500.
+ */
+const CLEARABLE_FIELDS = ['productId', 'templateId', 'mediaId', 'businessHours'] as const;
+
+/** Clearable fields whose value is an id and has to be cast. */
+const OID_FIELDS = new Set<string>(['productId', 'templateId', 'mediaId']);
+
 const ARRAY_OID_FIELDS = ['whatsappNumberIds'] as const;
+
+/** Always written as-is. Deliberately excludes everything in CLEARABLE_FIELDS. */
 const PLAIN_FIELDS = [
   'name',
   'enabled',
@@ -441,7 +452,6 @@ const PLAIN_FIELDS = [
   'delaySeconds',
   'delayMinutes',
   'throttle',
-  'businessHours',
 ] as const;
 
 function buildRulePatch(input: Record<string, unknown>): {
@@ -450,21 +460,35 @@ function buildRulePatch(input: Record<string, unknown>): {
 } {
   const set: Record<string, unknown> = {};
   const unset: Record<string, ''> = {};
+
   for (const key of PLAIN_FIELDS) {
     if (input[key] !== undefined) set[key] = input[key];
   }
-  for (const key of OID_FIELDS) {
-    if (input[key] === undefined) continue;
+
+  // One decision per field: an explicit null (or empty string) clears it, any other
+  // value writes it, and an absent key leaves whatever is stored alone.
+  for (const key of CLEARABLE_FIELDS) {
     const val = input[key];
-    // An explicit null clears the link; leaving the key out keeps whatever is stored.
-    if (val === null || val === '') unset[key] = '';
-    else set[key] = new Types.ObjectId(String(val));
+    if (val === undefined) continue;
+    if (val === null || val === '') {
+      unset[key] = '';
+    } else {
+      set[key] = OID_FIELDS.has(key) ? new Types.ObjectId(String(val)) : val;
+    }
   }
+
   for (const key of ARRAY_OID_FIELDS) {
     if (input[key] === undefined) continue;
     set[key] = (input[key] as string[]).map((id) => new Types.ObjectId(id));
   }
-  if (input.businessHours === null) unset.businessHours = '';
+
+  // A field in both halves is a coding mistake, and Mongo reports it as an opaque write
+  // error. Fail loudly here instead, where the field name is still in hand.
+  const clashing = Object.keys(set).filter((key) => key in unset);
+  if (clashing.length) {
+    throw new Error(`Cannot set and clear the same field: ${clashing.join(', ')}`);
+  }
+
   return { set, unset };
 }
 

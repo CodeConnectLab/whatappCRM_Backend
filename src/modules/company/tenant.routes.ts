@@ -330,6 +330,8 @@ export function createTenantRouter(): Router {
   /* ----------------------------------------------- products & automation */
 
   tenant.get('/products', asyncHandler(productCtrl.getProducts));
+  /** What Meta has actually sent us, so nobody has to hunt for an ad ID by hand. */
+  tenant.get('/ad-sources', asyncHandler(productCtrl.getAdSources));
   tenant.post(
     '/products',
     requireCompanyAdmin,
