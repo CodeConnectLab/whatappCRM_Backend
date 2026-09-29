@@ -97,6 +97,27 @@ export async function refresh(req, res) {
         res.status(401).json({ error: 'Invalid refresh token' });
     }
 }
+/**
+ * Lets a signed-in user replace their own password — the exit from the
+ * `mustChangePassword` state an admin-created account starts in.
+ */
+export async function changePassword(req, res) {
+    const { currentPassword, password } = req.body;
+    const user = await UserModel.findOne({ _id: req.user.sub, deletedAt: null });
+    if (!user) {
+        res.status(404).json({ error: 'User not found' });
+        return;
+    }
+    const ok = await bcrypt.compare(currentPassword, user.passwordHash);
+    if (!ok) {
+        res.status(400).json({ error: 'Current password is incorrect' });
+        return;
+    }
+    user.passwordHash = await bcrypt.hash(password, 12);
+    user.mustChangePassword = false;
+    await user.save();
+    res.json({ ok: true });
+}
 export async function forgotPassword(req, res) {
     const { email } = req.body;
     const user = await UserModel.findOne({ email, deletedAt: null });

@@ -17,11 +17,30 @@ const referralSchema = new Schema({
     videoUrl: { type: String, trim: true },
     thumbnailUrl: { type: String, trim: true },
 }, { _id: false });
+/**
+ * Attachment travelling with a message.
+ *
+ * The object `key` is the durable part; the browser-facing URL is minted per request
+ * as a short-lived presigned GET, so the bucket never has to be public and a leaked
+ * link expires on its own.
+ */
+const messageMediaSchema = new Schema({
+    mediaId: { type: Schema.Types.ObjectId, ref: 'Media' },
+    key: { type: String, trim: true },
+    /** Fallback for attachments that live outside our storage (e.g. an ad thumbnail). */
+    url: { type: String, trim: true },
+    mimeType: { type: String, trim: true },
+    filename: { type: String, trim: true },
+    size: { type: Number },
+    /** WhatsApp bucket the attachment is sent as. */
+    kind: { type: String, enum: ['image', 'video', 'audio', 'document', 'sticker'] },
+}, { _id: false });
 const messageSchema = new Schema({
     companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
     chatId: { type: Schema.Types.ObjectId, ref: 'Chat', required: true, index: true },
     direction: { type: String, enum: MESSAGE_DIRECTIONS, required: true },
-    body: { type: String, required: true },
+    // Not required: a bare image or voice note has no text of its own.
+    body: { type: String, default: '' },
     /** Raw WhatsApp message type: text, image, button, interactive, location, … */
     messageType: { type: String, trim: true, default: 'text' },
     status: { type: String, enum: MESSAGE_STATUSES, default: 'queued' },
@@ -31,6 +50,11 @@ const messageSchema = new Schema({
     /** Present only on the first message of an ad-sourced conversation. */
     referral: { type: referralSchema, default: undefined },
     mediaId: { type: Schema.Types.ObjectId, ref: 'Media' },
+    media: { type: messageMediaSchema, default: undefined },
+    /** True when an auto-response rule produced this message, not a person. */
+    isAutomated: { type: Boolean, default: false },
+    /** Rule that generated it, for the automation's own stats. */
+    autoResponseRuleId: { type: Schema.Types.ObjectId, ref: 'AutoResponseRule' },
     /** Meta media id for inbound attachments (download via the Graph API when needed). */
     metaMediaId: { type: String, trim: true },
     senderUserId: { type: Schema.Types.ObjectId, ref: 'User' },

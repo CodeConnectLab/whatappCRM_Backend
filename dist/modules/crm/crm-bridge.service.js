@@ -3,6 +3,7 @@ import { Types } from 'mongoose';
 import { CrmBridgeModel } from './crm-bridge.model.js';
 import { ChatModel } from '../chat/chat.model.js';
 import { ContactModel } from '../contact/contact.model.js';
+import { ProductModel } from '../product/product.model.js';
 import { decryptSecret, encryptSecret } from '../../utils/encryption.js';
 import { logger } from '../../utils/logger.js';
 const PUSH_TIMEOUT_MS = 10_000;
@@ -120,7 +121,14 @@ export async function pushChatToCrm(companyId, chatId) {
         return 'failed';
     }
     const { firstName, lastName } = splitName(contact.name);
-    const adLabel = referral?.headline ?? bridge.leadSourceLabel ?? 'WhatsApp';
+    // A matched product is the most meaningful label the CRM can get: "Solar Rooftop"
+    // reads better in a lead list than the ad's headline, and it groups leads that came
+    // from several creatives for the same thing.
+    const product = chat.productId
+        ? await ProductModel.findById(chat.productId).select('name crmLabel').lean()
+        : null;
+    const productLabel = product ? (product.crmLabel?.trim() || product.name) : undefined;
+    const adLabel = productLabel ?? referral?.headline ?? bridge.leadSourceLabel ?? 'WhatsApp';
     const payload = {
         firstName: firstName || contact.phone,
         lastName,
@@ -141,6 +149,7 @@ export async function pushChatToCrm(companyId, chatId) {
         waAdHeadline: referral?.headline,
         waAdBody: referral?.adBody,
         waFirstMessage: chat.firstInboundMessage,
+        waProduct: productLabel,
     };
     for (const key of Object.keys(payload)) {
         if (payload[key] === undefined || payload[key] === '')

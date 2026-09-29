@@ -18,6 +18,8 @@ export async function sendWhatsappMessage(input) {
             toPhone: input.toPhone,
             body: input.body,
             mediaUrl: input.mediaUrl,
+            ...(input.mediaKind ? { mediaKind: input.mediaKind } : {}),
+            ...(input.filename ? { filename: input.filename } : {}),
         });
     }
     return sendTwilioWhatsappMessage({

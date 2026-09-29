@@ -5,6 +5,13 @@ const userSchema = new Schema({
     passwordHash: { type: String, required: true },
     name: { type: String, required: true, trim: true },
     isSuperAdmin: { type: Boolean, default: false },
+    /**
+     * Set when an admin created the account with a temporary password. The user keeps
+     * full access but the UI nags until they pick their own password.
+     */
+    mustChangePassword: { type: Boolean, default: false },
+    /** Who created this account, when it was not a self-service registration. */
+    createdByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
     refreshTokenHashes: { type: [String], default: [] },
     passwordResetTokenHash: { type: String },
     passwordResetExpires: { type: Date },
