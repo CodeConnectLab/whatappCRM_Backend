@@ -1,27 +1,62 @@
 import { createAutoResponse, deleteAutoResponse, listAutoResponses, previewAutoResponse, updateAutoResponse, } from './auto-response.service.js';
 import { logActivity } from '../activity/activity.service.js';
+import { logger } from '../../utils/logger.js';
+/**
+ * Turns a save failure into something the operator can act on.
+ *
+ * These handlers used to let everything reach the generic error handler, which reports
+ * "Internal server error" and nothing else — so a rule that could never save gave the
+ * user no idea which field was at fault.
+ */
+function failRule(res, e, fallback) {
+    logger.error('Auto-response save failed', { err: e });
+    const message = e instanceof Error ? e.message : fallback;
+    if (/duplicate key/i.test(message)) {
+        res.status(409).json({ error: 'A rule with that name already exists' });
+        return;
+    }
+    if (/Cast to ObjectId/i.test(message)) {
+        res.status(400).json({ error: 'One of the selected items no longer exists — reopen the rule and pick again' });
+        return;
+    }
+    if (/validation failed/i.test(message)) {
+        res.status(400).json({ error: message.replace(/^.*validation failed:\s*/i, '') });
+        return;
+    }
+    res.status(400).json({ error: message || fallback });
+}
 export async function getAutoResponses(req, res) {
     res.json(await listAutoResponses(req.companyId));
 }
 export async function postAutoResponse(req, res) {
-    const rule = await createAutoResponse(req.companyId, req.body);
-    await logActivity({
-        companyId: req.companyId,
-        userId: req.user.sub,
-        action: 'auto_response.created',
-        resource: 'auto_response',
-        resourceId: String(rule._id),
-    });
-    res.status(201).json(rule);
+    try {
+        const rule = await createAutoResponse(req.companyId, req.body);
+        await logActivity({
+            companyId: req.companyId,
+            userId: req.user.sub,
+            action: 'auto_response.created',
+            resource: 'auto_response',
+            resourceId: String(rule._id),
+        });
+        res.status(201).json(rule);
+    }
+    catch (e) {
+        failRule(res, e, 'Could not create the rule');
+    }
 }
 export async function patchAutoResponse(req, res) {
     const { id } = req.params;
-    const rule = await updateAutoResponse(req.companyId, id, req.body);
-    if (!rule) {
-        res.status(404).json({ error: 'Auto-response not found' });
-        return;
+    try {
+        const rule = await updateAutoResponse(req.companyId, id, req.body);
+        if (!rule) {
+            res.status(404).json({ error: 'Auto-response not found' });
+            return;
+        }
+        res.json(rule);
     }
-    res.json(rule);
+    catch (e) {
+        failRule(res, e, 'Could not save the rule');
+    }
 }
 export async function removeAutoResponse(req, res) {
     const { id } = req.params;

@@ -8,12 +8,13 @@ import { emitToCompany } from '../../socket/io.js';
 import { logger } from '../../utils/logger.js';
 import { MetaWhatsappConfigModel } from '../meta/meta-whatsapp-config.model.js';
 import { decryptSecret } from '../../utils/encryption.js';
-import { extractPhoneNumberId, inboundErrorText, inboundMessageText, normalizeInboundPhone, normalizeReferral, verifyMetaSignature, } from '../meta/meta-webhook.utils.js';
+import { extractPhoneNumberId, inboundErrorText, inboundMessageText, normalizeInboundPhone, normalizePricing, normalizeReferral, verifyMetaSignature, } from '../meta/meta-webhook.utils.js';
 import { pushChatToCrm } from '../crm/crm-bridge.service.js';
 import { autoAssignChat } from '../chat/lead-assignment.service.js';
 import { matchProductForLead } from '../product/product.service.js';
 import { runAutoResponsesForInbound } from '../automation/auto-response.service.js';
 import { ingestInboundMedia } from '../media/inbound-media.service.js';
+import { applyCampaignMessageStatus } from '../campaign/campaign.service.js';
 import { WebhookLogModel } from './webhook-log.model.js';
 async function recordWebhookVerifyResult(companyId, ok, error) {
     if (!companyId)
@@ -346,10 +347,15 @@ export async function metaWhatsappWebhook(req, res) {
                         err?.message ||
                         err?.title ||
                         (err?.code != null ? `Meta error ${err.code}` : undefined);
+                    // Meta reports what it charged on the status update, and only there. Recording
+                    // it is what makes an honest usage figure possible — a free-form reply inside
+                    // the service window comes back not billable, so it must never be charged for.
+                    const pricing = normalizePricing(st.pricing);
                     const updated = await MessageModel.findOneAndUpdate({ twilioSid: sid }, {
                         $set: {
                             status: next,
                             ...(statusDetail ? { statusDetail } : {}),
+                            ...(pricing ? { billing: { ...pricing, recordedAt: new Date() } } : {}),
                         },
                         ...(next !== 'failed' ? { $unset: { statusDetail: '' } } : {}),
                     }, { new: true }).lean();
@@ -359,6 +365,15 @@ export async function metaWhatsappWebhook(req, res) {
                             message: updated,
                         });
                     }
+                    // Campaign sends live in their own collection, so the same status has to be
+                    // applied there or campaign stats stay stuck at "Meta accepted it".
+                    await applyCampaignMessageStatus({
+                        companyId,
+                        sid,
+                        status: next,
+                        ...(statusDetail ? { error: statusDetail } : {}),
+                        ...(pricing ? { pricing } : {}),
+                    });
                 }
             }
         }

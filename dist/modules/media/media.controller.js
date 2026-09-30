@@ -3,6 +3,7 @@ import { MediaModel } from './media.model.js';
 import { makeMediaKey, presignGet, presignPut, publicObjectUrl } from './s3.service.js';
 import { deliverableKind, assertWithinSizeLimit } from './media-kind.js';
 import { isS3MediaConfigured } from '../../config/env.js';
+import { runMediaDiagnostics } from './media-diagnostics.service.js';
 export async function presignUpload(req, res) {
     if (!isS3MediaConfigured()) {
         res.status(503).json({
@@ -98,4 +99,13 @@ export async function listMedia(req, res) {
         .limit(50)
         .lean();
     res.json(rows);
+}
+/**
+ * Round-trips the media bucket and reports which step failed.
+ *
+ * Presigning is local crypto and always succeeds, so a broken setup looks healthy until
+ * a real write is attempted. This does the write.
+ */
+export async function getMediaDiagnostics(req, res) {
+    res.json(await runMediaDiagnostics(req.companyId));
 }

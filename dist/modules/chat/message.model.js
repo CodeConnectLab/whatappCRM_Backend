@@ -34,6 +34,15 @@ const messageMediaSchema = new Schema({
     size: { type: Number },
     /** WhatsApp bucket the attachment is sent as. */
     kind: { type: String, enum: ['image', 'video', 'audio', 'document', 'sticker'] },
+    /**
+     * Why the file is not here, when it is not.
+     *
+     * An inbound attachment we could not copy out of WhatsApp used to leave the message
+     * looking like plain text reading "[image]", with the reason only in the server log
+     * — so the agent could not tell a photo they were not shown from one that was never
+     * sent.
+     */
+    unavailableReason: { type: String, trim: true },
 }, { _id: false });
 const messageSchema = new Schema({
     companyId: { type: Schema.Types.ObjectId, ref: 'Company', required: true, index: true },
@@ -57,6 +66,22 @@ const messageSchema = new Schema({
     autoResponseRuleId: { type: Schema.Types.ObjectId, ref: 'AutoResponseRule' },
     /** Meta media id for inbound attachments (download via the Graph API when needed). */
     metaMediaId: { type: String, trim: true },
+    /**
+     * What Meta charged, straight from the status webhook's `pricing` object.
+     *
+     * Kept verbatim rather than derived: this is the record that has to reconcile
+     * against Meta's own invoice, so guessing the category here would be worse than
+     * storing nothing.
+     */
+    billing: {
+        billable: { type: Boolean },
+        /** marketing | utility | authentication | service */
+        category: { type: String, trim: true },
+        pricingModel: { type: String, trim: true },
+        /** regular | free_customer_service | free_entry_point */
+        pricingType: { type: String, trim: true },
+        recordedAt: { type: Date },
+    },
     senderUserId: { type: Schema.Types.ObjectId, ref: 'User' },
     deletedAt: { type: Date },
 }, { timestamps: true });

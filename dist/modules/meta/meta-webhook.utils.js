@@ -133,3 +133,31 @@ export function inboundErrorText(m) {
         return err.code != null ? `${text} (${err.code})` : text;
     return err.code != null ? `Meta error ${err.code}` : undefined;
 }
+export const BILLING_CATEGORIES = [
+    'marketing',
+    'utility',
+    'authentication',
+    'service',
+];
+/**
+ * Reads Meta's pricing object off a status update.
+ *
+ * `billable` is taken at Meta's word rather than inferred, because the rules behind it
+ * (free service messages, free utility inside an open window, free entry points) change
+ * and Meta is the one billing.
+ */
+export function normalizePricing(pricing) {
+    if (!pricing)
+        return undefined;
+    const category = pricing.category?.trim().toLowerCase();
+    return {
+        // Meta omits `billable` on some free types; an explicit false or a free type both
+        // mean "not charged".
+        billable: pricing.billable === true &&
+            pricing.type !== 'free_customer_service' &&
+            pricing.type !== 'free_entry_point',
+        ...(category ? { category } : {}),
+        ...(pricing.pricing_model ? { pricingModel: pricing.pricing_model } : {}),
+        ...(pricing.type ? { pricingType: pricing.type } : {}),
+    };
+}

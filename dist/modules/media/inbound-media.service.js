@@ -48,6 +48,7 @@ export async function ingestInboundMedia(input) {
             companyId: input.companyId,
             messageId: input.messageId,
         });
+        await markMediaUnavailable(input, 'Media storage is not configured, so this file could not be saved.');
         return;
     }
     try {
@@ -104,6 +105,33 @@ export async function ingestInboundMedia(input) {
             metaMediaId: input.metaMediaId,
             err: e,
         });
+        await markMediaUnavailable(input, e instanceof Error ? e.message : 'The file could not be downloaded from WhatsApp.');
+    }
+}
+/**
+ * Leaves a reason on the message so the inbox can say the attachment is missing and
+ * why, instead of rendering a bare "[image]" that looks like the customer typed it.
+ */
+async function markMediaUnavailable(input, reason) {
+    try {
+        await MessageModel.updateOne({ _id: new Types.ObjectId(input.messageId) }, {
+            $set: {
+                media: {
+                    ...(input.filename ? { filename: input.filename } : {}),
+                    unavailableReason: reason.slice(0, 300),
+                },
+            },
+        });
+        const updated = await MessageModel.findById(new Types.ObjectId(input.messageId)).lean();
+        if (updated) {
+            emitToCompany(input.companyId, 'message:media', {
+                chatId: input.chatId,
+                message: updated,
+            });
+        }
+    }
+    catch (err) {
+        logger.warn('Could not record media failure on the message', { err });
     }
 }
 /**
@@ -119,6 +147,7 @@ export async function ingestTwilioInboundMedia(input) {
             companyId: input.companyId,
             messageId: input.messageId,
         });
+        await markMediaUnavailable(input, 'Media storage is not configured, so this file could not be saved.');
         return;
     }
     try {
@@ -177,5 +206,6 @@ export async function ingestTwilioInboundMedia(input) {
             messageId: input.messageId,
             err: e,
         });
+        await markMediaUnavailable(input, e instanceof Error ? e.message : 'The file could not be downloaded from Twilio.');
     }
 }

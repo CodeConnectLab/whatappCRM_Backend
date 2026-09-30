@@ -103,6 +103,8 @@ export function createTenantRouter() {
     tenant.post('/media/:id/complete', validateRequest(mediaValidation.complete), asyncHandler(mediaCtrl.completeUpload));
     tenant.get('/media/:id/url', validateRequest(mediaValidation.byId), asyncHandler(mediaCtrl.getMediaUrl));
     tenant.get('/media', asyncHandler(mediaCtrl.listMedia));
+    /** Proves whether media storage actually works, rather than merely being configured. */
+    tenant.get('/media/diagnostics', requireCompanyAdmin, asyncHandler(mediaCtrl.getMediaDiagnostics));
     /* ------------------------------------------------------- quick replies */
     tenant.get('/quick-replies', asyncHandler(chatCtrl.getQuickReplies));
     tenant.post('/quick-replies', validateRequest({ body: chatValidation.createQuickReply }), asyncHandler(chatCtrl.postQuickReply));
@@ -110,6 +112,8 @@ export function createTenantRouter() {
     tenant.delete('/quick-replies/:id', requireCompanyAdmin, validateRequest(chatValidation.quickReplyById), asyncHandler(chatCtrl.removeQuickReply));
     /* ----------------------------------------------- products & automation */
     tenant.get('/products', asyncHandler(productCtrl.getProducts));
+    /** What Meta has actually sent us, so nobody has to hunt for an ad ID by hand. */
+    tenant.get('/ad-sources', asyncHandler(productCtrl.getAdSources));
     tenant.post('/products', requireCompanyAdmin, validateRequest({ body: productValidation.create }), asyncHandler(productCtrl.postProduct));
     tenant.patch('/products/:id', requireCompanyAdmin, validateRequest(productValidation.update), asyncHandler(productCtrl.patchProduct));
     tenant.delete('/products/:id', requireCompanyAdmin, validateRequest(productValidation.byId), asyncHandler(productCtrl.removeProduct));

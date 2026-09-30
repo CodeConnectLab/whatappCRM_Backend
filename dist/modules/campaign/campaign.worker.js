@@ -6,11 +6,12 @@ import { ContactModel } from '../contact/contact.model.js';
 import { WhatsappNumberModel } from '../twilio/whatsapp-number.model.js';
 import { CAMPAIGN_QUEUE } from './campaign.queue.js';
 import { redisConnection } from './queue.connection.js';
-import { debitCredits, getCreditPerMessage } from '../wallet/wallet.service.js';
+import { getCreditPerMessage, refundCredits, tryDebitCredits } from '../wallet/wallet.service.js';
 import { sendWhatsappMessage, sendWhatsappTemplateMessage } from '../messaging/messaging.service.js';
 import { TemplateModel } from '../template/template.model.js';
 import { buildParameterValues } from '../template/template.service.js';
 import { logger } from '../../utils/logger.js';
+import { settleCampaignIfFinished } from './campaign.service.js';
 export function startCampaignWorker() {
     return new Worker(CAMPAIGN_QUEUE, async (job) => {
         const { companyId, campaignId, contactId } = job.data;
@@ -54,6 +55,17 @@ export function startCampaignWorker() {
             await CampaignModel.updateOne({ _id: camp._id }, { $inc: { 'stats.failed': 1 } });
             return;
         }
+        const cost = getCreditPerMessage();
+        const paid = await tryDebitCredits(companyId, cost, 'campaign_message', {
+            campaignMessageId: String(cm._id),
+        });
+        if (!paid) {
+            // Pause rather than burn through the rest of the audience one failure at a time.
+            await CampaignMessageModel.updateOne({ _id: cm._id }, { $set: { status: 'failed', error: 'out of credits' } });
+            await CampaignModel.updateOne({ _id: camp._id }, { $inc: { 'stats.failed': 1 }, $set: { status: 'paused' } });
+            logger.warn('Campaign paused: out of credits', { companyId, campaignId });
+            return;
+        }
         try {
             const { sid } = useTemplate
                 ? await sendWhatsappTemplateMessage({
@@ -74,28 +86,26 @@ export function startCampaignWorker() {
                     ...(mediaUrl ? { mediaUrl: [mediaUrl] } : {}),
                 });
             const marked = await CampaignMessageModel.findOneAndUpdate({ _id: cm._id, status: { $ne: 'sent' } }, { $set: { status: 'sent', twilioSid: sid } }, { new: true });
-            if (!marked)
-                return;
-            try {
-                await debitCredits(companyId, getCreditPerMessage(), 'campaign_message', {
+            if (!marked) {
+                // Another worker already sent this recipient; release our reservation.
+                await refundCredits(companyId, cost, 'campaign_message_refund', {
                     campaignMessageId: String(cm._id),
                 });
-            }
-            catch (debitErr) {
-                logger.error('Campaign message sent but wallet debit failed', {
-                    campaignId,
-                    contactId,
-                    sid,
-                    err: debitErr,
-                });
+                return;
             }
             await CampaignModel.updateOne({ _id: camp._id }, { $inc: { 'stats.sent': 1 } });
+            await settleCampaignIfFinished(campaignId);
         }
         catch (e) {
             const message = e instanceof Error ? e.message : 'send failed';
             logger.warn('Campaign send failed', { message, campaignId, contactId });
             await CampaignMessageModel.updateOne({ _id: cm._id, status: { $ne: 'sent' } }, { $set: { status: 'failed', error: message } });
             await CampaignModel.updateOne({ _id: camp._id }, { $inc: { 'stats.failed': 1 } });
+            // Reserved before dispatch, so an undelivered message must not be charged.
+            await refundCredits(companyId, cost, 'campaign_message_refund', {
+                campaignMessageId: String(cm._id),
+            });
+            await settleCampaignIfFinished(campaignId);
             throw e;
         }
     }, {

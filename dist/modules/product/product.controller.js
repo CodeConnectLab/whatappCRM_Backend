@@ -1,7 +1,13 @@
-import { createProduct, deleteProduct, listProducts, updateProduct, } from './product.service.js';
+import { createProduct, deleteProduct, listAdSources, listProducts, updateProduct, } from './product.service.js';
 import { logActivity } from '../activity/activity.service.js';
 export async function getProducts(req, res) {
     res.json(await listProducts(req.companyId));
+}
+/** Ad IDs and headlines that have actually produced leads, for the mapping pickers. */
+export async function getAdSources(req, res) {
+    const q = req.query;
+    const days = typeof q.days === 'string' ? Number(q.days) : undefined;
+    res.json(await listAdSources(req.companyId, Number.isFinite(days) ? days : 90));
 }
 export async function postProduct(req, res) {
     try {

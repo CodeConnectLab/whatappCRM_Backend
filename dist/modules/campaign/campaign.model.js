@@ -17,6 +17,8 @@ const campaignSchema = new Schema({
     contactGroupIds: { type: [{ type: Schema.Types.ObjectId, ref: 'ContactGroup' }], default: [] },
     contactIds: { type: [{ type: Schema.Types.ObjectId, ref: 'Contact' }], default: [] },
     scheduledAt: { type: Date },
+    /** Set when every recipient has an outcome. */
+    completedAt: { type: Date },
     stats: {
         total: { type: Number, default: 0 },
         sent: { type: Number, default: 0 },
