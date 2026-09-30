@@ -381,37 +381,174 @@ Then WhatsApp Numbers mein:
 
 ## 8. AWS S3 / File Storage Setup
 
-Media upload ke liye S3 chahiye (production mein required).
+Media (image, video, PDF) ke liye S3 chahiye. Iske bina chat me attachments kaam nahi
+karenge — text chalta rahega aur log me warning aayegi.
 
-### Step 1 — AWS Account
-- https://aws.amazon.com pe account banao
+> **Pehle ye samjho — S3 kyun chahiye?**
+> Meta apni media sirf thodi der rakhta hai: download URL **5 minute** me expire, webhook
+> ka media id **7 din** me, aur file **30 din** me delete. Uske upar download karne ke liye
+> access token chahiye. Isliye Meta ka link chat me seedha daal nahi sakte — 5 minute baad
+> image dead. Har BSP (Wati, Interakt, AiSensy, Twilio) media apne storage me copy karta
+> hai. Yahi standard tareeka hai.
 
-### Step 2 — S3 Bucket banao
-1. AWS Console → **S3** → **"Create bucket"**
-2. Bucket name: kuch unique (e.g., `wtsp-media-prod`)
-3. Region: `ap-south-1` (Mumbai)
-4. **"Block all public access":** OFF karo (media publicly accessible hoga)
-5. **"Create bucket"**
+### Step 1 — S3 Bucket banao
 
-### Step 3 — IAM User banao (credentials ke liye)
-1. AWS Console → **IAM** → **Users** → **"Add users"**
-2. Username: `wtsp-s3-user`
-3. **"Attach policies directly"** → `AmazonS3FullAccess`
-4. User banao
+1. AWS Console → top-right region **Asia Pacific (Mumbai) ap-south-1** select karo
+2. **S3** → **Create bucket**
+3. **Bucket type: `General purpose`** ← ye chuno
 
-### Step 4 — Access Keys lena
-1. IAM → Users → `wtsp-s3-user`
-2. **"Security credentials"** tab
-3. **"Create access key"** → Application running outside AWS
-4. **Access Key ID** aur **Secret Access Key** copy karo
+   > **Directory type kyun nahi?** Wo "S3 Express One Zone" hai — ek hi Availability Zone
+   > me rehta hai (zone gira to data gaya), per-GB kaafi mehenga hai, aur lifecycle rules
+   > waise kaam nahi karte. Wo ML training jaise high-speed kaam ke liye hai. Media archive
+   > ke liye General purpose hi sahi hai.
 
-### Step 5 — `.env` mein dalo
+4. **Bucket name:** `wtsp-media`
+
+   > Naam **poori duniya me unique** hona chahiye (sirf aapke account me nahi). Agar
+   > "already exists" aaye to `wtsp-media-codeconnect` try karo.
+
+5. **Object Ownership:** `ACLs disabled (recommended)` — default hi rehne do
+6. **Block Public Access: chaaron checkbox ON rakho** (default)
+
+   > **Ye sabse important step hai.** Bucket ko public karne ki zaroorat **nahi** hai.
+   > App har file ke liye short-lived signed URL banati hai (15 minute), to browser aur
+   > WhatsApp dono file padh lete hain bina bucket public kiye. Bucket public karne ka
+   > matlab hota: kisi bhi customer ka Aadhaar, invoice, photo — sab internet par khula.
+
+7. **Bucket Versioning:** `Disable` (default)
+
+   > Versioning har overwrite ki purani copy hamesha rakhta hai, to storage bill badhta
+   > rehta hai. Hamari app har file ko naya unique naam deti hai, overwrite hota hi nahi.
+
+8. **Default encryption:** `SSE-S3` (default) — rehne do. Free hai, disk par encrypt karta hai.
+
+   > SSE-KMS mat chuno — wo per-request paisa leta hai aur ek extra IAM permission maangta hai.
+
+9. **Object Lock:** Disable
+10. **Create bucket**
+
+### Step 2 — CORS lagao (ye step miss hua to upload fail hoga)
+
+Upload browser se **seedha** bucket me jaata hai (server se nahi, taaki 100 MB ki PDF
+Node process se na guzre). Iske liye bucket ko permission deni padti hai ki aapki site
+se `PUT` allowed hai. Warna browser request bhejne se **pehle** rok deta hai, aur app ko
+sirf "network error" dikhta hai.
+
+1. Bucket kholo → **Permissions** tab
+2. Neeche scroll → **Cross-origin resource sharing (CORS)** → **Edit**
+3. Ye paste karo (apna domain daalo):
+
+```json
+[
+  {
+    "AllowedHeaders": ["*"],
+    "AllowedMethods": ["PUT", "GET"],
+    "AllowedOrigins": [
+      "https://wtsp.codeconnect.in",
+      "http://localhost:5173"
+    ],
+    "ExposeHeaders": ["ETag"],
+    "MaxAgeSeconds": 3000
+  }
+]
+```
+
+4. **Save changes**
+
+### Step 3 — IAM policy banao (sirf utni permission jitni chahiye)
+
+> **`AmazonS3FullAccess` mat lagao.** Wo poore account ke har bucket par sab kuch allow
+> karta hai — delete bhi. Server ki keys `.env` me plain text me hoti hain; leak hui to
+> nuksaan sirf is ek bucket tak simit rehna chahiye.
+
+1. AWS Console → **IAM** → **Policies** → **Create policy**
+2. **JSON** tab par switch karo, sab kuch hata ke ye paste karo:
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "ReadWriteMediaObjects",
+      "Effect": "Allow",
+      "Action": ["s3:PutObject", "s3:GetObject"],
+      "Resource": "arn:aws:s3:::wtsp-media/*"
+    },
+    {
+      "Sid": "ListForBetterErrors",
+      "Effect": "Allow",
+      "Action": ["s3:ListBucket"],
+      "Resource": "arn:aws:s3:::wtsp-media"
+    }
+  ]
+}
+```
+
+> Pehla block files likhne aur padhne ke liye — `/*` matlab bucket ke **andar ki files**.
+> Doosra block bucket **khud** ke liye; iske bina missing file ka error "AccessDenied"
+> aata hai "NoSuchKey" ki jagah, jo debug karna mushkil kar deta hai.
+> `DeleteObject` jaan-boojh kar nahi diya — app kuch delete nahi karti.
+
+3. **Next** → Policy name: `wtsp-media-access` → **Create policy**
+
+### Step 4 — IAM User banao
+
+1. **IAM** → **Users** → **Create user**
+2. Username: `wtsp-backend`
+3. **"Provide user access to the AWS Management Console" — check NA karo**
+
+   > Ye insaan nahi, server hai. Isse login karne ki zaroorat nahi, sirf API keys chahiye.
+
+4. **Next** → **Attach policies directly** → search `wtsp-media-access` → select
+5. **Next** → **Create user**
+
+### Step 5 — Access Keys lo
+
+1. **IAM** → **Users** → `wtsp-backend` → **Security credentials** tab
+2. Neeche **Access keys** → **Create access key**
+3. Use case: **Application running outside AWS** → Next → Create
+4. **Access key** aur **Secret access key** dono copy karo
+
+   > **Secret sirf ek baar dikhta hai.** Page band kiya to dobara nahi milega — naya key
+   > banana padega. Abhi hi `.env` me paste kar do.
+
+### Step 6 — `.env` me daalo
+
 ```env
 AWS_REGION=ap-south-1
-S3_BUCKET=wtsp-media-prod
+S3_BUCKET=wtsp-media
 AWS_ACCESS_KEY_ID=AKIA...
 AWS_SECRET_ACCESS_KEY=xxx...
 ```
+
+> **`S3_ENDPOINT` aur `S3_FORCE_PATH_STYLE` ko chhuo bhi nahi — poori line hi mat likho.**
+>
+> Ye do lines **sirf** MinIO / Cloudflare R2 / Wasabi jaise non-AWS storage ke liye hain.
+> Asli AWS S3 ke liye SDK khud address bana leta hai: `bucket + region`. Agar galti se
+> `S3_ENDPOINT=http://localhost:9000` (MinIO ka local example) chhod diya, to server AWS
+> ki jagah apne hi se baat karega aur upload bilkul samajh me na aane waale XML error ke
+> saath fail hoga.
+
+### Step 7 — Verify karo
+
+`pm2 restart wtsp-backend` ke baad app me:
+
+**Settings → Channel → "Test media storage"**
+
+Ye asli round-trip karta hai — file likhta hai, signed link banata hai, wapas padhta hai —
+aur jo step toota uska naam + AWS error code batata hai. Sab green aaye to chat me image
+bhej ke confirm kar lo.
+
+### Aage ke liye — cost
+
+Storage sasta hai, **bandwidth (egress) mehenga hai**. Chat me ek image kai baar khulti
+hai, to bill egress se banta hai.
+
+- **Thumbnails** — bubble me 20 KB ki preview, original sirf click par. Egress 80–90% kam.
+- **Lifecycle rule** (Management tab) — 30 din baad Standard-IA, 90 din baad Glacier IR.
+- **Cloudflare R2** — egress **free**, storage bhi sasta. S3-compatible hai, to app ka code
+  nahi badlega: bas `S3_ENDPOINT` me R2 ka address daalna hoga. Media 100 GB cross kare to
+  ye shift karne layak hai.
 
 ---
 
