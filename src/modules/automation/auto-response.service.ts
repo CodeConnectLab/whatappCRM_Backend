@@ -183,7 +183,16 @@ function conditionsMatch(rule: RuleDoc, ctx: AutoResponseContext): boolean {
 }
 
 /** Placeholders an auto-response body may use, beyond the shared contact ones. */
-function renderBody(
+/**
+ * Fills the placeholders in an auto-response body.
+ *
+ * Supports a fallback after a pipe — `{{product|our services}}` — because a placeholder
+ * that resolves to nothing wrecks the sentence around it. A lead that matched no product
+ * was being greeted with "thanks for your interest in the ." Anything still unresolved
+ * is dropped along with one adjoining space, so the worst case is a slightly terse
+ * sentence rather than a visibly broken one.
+ */
+export function renderBody(
   body: string,
   ctx: {
     contactName?: string | null;
@@ -193,18 +202,36 @@ function renderBody(
     agentName?: string | null;
   },
 ): string {
-  let out = applyTemplate(body, {
-    name: ctx.contactName,
-    phone: ctx.contactPhone,
-    email: ctx.contactEmail,
-  });
-  const extras: Record<string, string> = {
-    product: ctx.productName ?? '',
-    agent: ctx.agentName ?? '',
+  const values: Record<string, string> = {
+    name: ctx.contactName?.trim() ?? '',
+    phone: ctx.contactPhone?.trim() ?? '',
+    email: ctx.contactEmail?.trim() ?? '',
+    product: ctx.productName?.trim() ?? '',
+    agent: ctx.agentName?.trim() ?? '',
   };
-  for (const [key, val] of Object.entries(extras)) {
-    out = out.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}}`, 'gi'), val);
-  }
+
+  // One pass over every {{ key }} or {{ key|fallback }}, rather than one pass per key,
+  // so a fallback containing another key's name cannot be rewritten in turn.
+  let out = body.replace(
+    /\{\{\s*([a-z_]+)\s*(?:\|([^}]*))?\}\}/gi,
+    (_match, rawKey: string, rawFallback?: string) => {
+      const key = rawKey.trim().toLowerCase();
+      const value = values[key];
+      if (value) return value;
+      const fallback = rawFallback?.trim();
+      if (fallback) return fallback;
+      // Unknown key: leave it visible so the operator notices the typo, rather than
+      // silently shipping a gap.
+      return key in values ? '' : `{{${rawKey}}}`;
+    },
+  );
+
+  // An emptied placeholder leaves "in the  ." — tidy the seams it left behind.
+  out = out
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s+([.,!?;:])/g, '$1')
+    .replace(/[ \t]+$/gm, '');
+
   return out;
 }
 
@@ -425,8 +452,19 @@ export async function listAutoResponses(companyId: string) {
     .lean();
 }
 
-const OID_FIELDS = ['productId', 'templateId', 'mediaId'] as const;
+/**
+ * Fields an explicit `null` clears. MongoDB refuses a `$set` and a `$unset` on the same
+ * path in one update — it was that overlap, on `businessHours`, that turned every "save
+ * rule" with business hours switched off into a 500.
+ */
+const CLEARABLE_FIELDS = ['productId', 'templateId', 'mediaId', 'businessHours'] as const;
+
+/** Clearable fields whose value is an id and has to be cast. */
+const OID_FIELDS = new Set<string>(['productId', 'templateId', 'mediaId']);
+
 const ARRAY_OID_FIELDS = ['whatsappNumberIds'] as const;
+
+/** Always written as-is. Deliberately excludes everything in CLEARABLE_FIELDS. */
 const PLAIN_FIELDS = [
   'name',
   'enabled',
@@ -441,7 +479,6 @@ const PLAIN_FIELDS = [
   'delaySeconds',
   'delayMinutes',
   'throttle',
-  'businessHours',
 ] as const;
 
 function buildRulePatch(input: Record<string, unknown>): {
@@ -450,21 +487,35 @@ function buildRulePatch(input: Record<string, unknown>): {
 } {
   const set: Record<string, unknown> = {};
   const unset: Record<string, ''> = {};
+
   for (const key of PLAIN_FIELDS) {
     if (input[key] !== undefined) set[key] = input[key];
   }
-  for (const key of OID_FIELDS) {
-    if (input[key] === undefined) continue;
+
+  // One decision per field: an explicit null (or empty string) clears it, any other
+  // value writes it, and an absent key leaves whatever is stored alone.
+  for (const key of CLEARABLE_FIELDS) {
     const val = input[key];
-    // An explicit null clears the link; leaving the key out keeps whatever is stored.
-    if (val === null || val === '') unset[key] = '';
-    else set[key] = new Types.ObjectId(String(val));
+    if (val === undefined) continue;
+    if (val === null || val === '') {
+      unset[key] = '';
+    } else {
+      set[key] = OID_FIELDS.has(key) ? new Types.ObjectId(String(val)) : val;
+    }
   }
+
   for (const key of ARRAY_OID_FIELDS) {
     if (input[key] === undefined) continue;
     set[key] = (input[key] as string[]).map((id) => new Types.ObjectId(id));
   }
-  if (input.businessHours === null) unset.businessHours = '';
+
+  // A field in both halves is a coding mistake, and Mongo reports it as an opaque write
+  // error. Fail loudly here instead, where the field name is still in hand.
+  const clashing = Object.keys(set).filter((key) => key in unset);
+  if (clashing.length) {
+    throw new Error(`Cannot set and clear the same field: ${clashing.join(', ')}`);
+  }
+
   return { set, unset };
 }
 

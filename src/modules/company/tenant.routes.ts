@@ -306,6 +306,8 @@ export function createTenantRouter(): Router {
     asyncHandler(mediaCtrl.getMediaUrl),
   );
   tenant.get('/media', asyncHandler(mediaCtrl.listMedia));
+  /** Proves whether media storage actually works, rather than merely being configured. */
+  tenant.get('/media/diagnostics', requireCompanyAdmin, asyncHandler(mediaCtrl.getMediaDiagnostics));
 
   /* ------------------------------------------------------- quick replies */
 
@@ -330,6 +332,8 @@ export function createTenantRouter(): Router {
   /* ----------------------------------------------- products & automation */
 
   tenant.get('/products', asyncHandler(productCtrl.getProducts));
+  /** What Meta has actually sent us, so nobody has to hunt for an ad ID by hand. */
+  tenant.get('/ad-sources', asyncHandler(productCtrl.getAdSources));
   tenant.post(
     '/products',
     requireCompanyAdmin,

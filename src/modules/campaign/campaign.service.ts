@@ -124,6 +124,29 @@ export async function resumeCampaign(
   companyId: string,
   userId?: string,
 ): Promise<void> {
+  const campaign = await CampaignModel.findOne({
+    _id: new Types.ObjectId(campaignId),
+    companyId: new Types.ObjectId(companyId),
+    deletedAt: null,
+  }).lean();
+  if (!campaign) throw new Error('Campaign not found');
+
+  const outstanding = await CampaignMessageModel.countDocuments({
+    campaignId: new Types.ObjectId(campaignId),
+    companyId: new Types.ObjectId(companyId),
+    status: { $in: ['pending', 'failed', 'queued'] },
+    $or: [{ twilioSid: { $exists: false } }, { twilioSid: null }, { twilioSid: '' }],
+  });
+
+  // Re-run the same checks as a fresh start, sized to what is actually left: a campaign
+  // paused for want of credits, or with an expired token, would otherwise resume
+  // straight into a wall of failures.
+  await assertCampaignCanStart(companyId, {
+    whatsappNumberId: campaign.whatsappNumberId,
+    templateId: campaign.templateId,
+    recipientCount: outstanding,
+  });
+
   await CampaignModel.updateOne(
     { _id: new Types.ObjectId(campaignId), companyId: new Types.ObjectId(companyId) },
     { $set: { status: 'running' } },
@@ -144,4 +167,81 @@ export async function resumeCampaign(
     resource: 'campaign',
     resourceId: campaignId,
   });
+}
+
+/**
+ * Applies a Meta delivery status to a campaign message.
+ *
+ * Campaign sends live in their own collection, so the webhook's update to `Message`
+ * never reached them: every finished campaign read "sent" forever, even for messages
+ * Meta went on to reject. Called for every status update; a sid that belongs to an
+ * ordinary chat message simply matches nothing.
+ */
+export async function applyCampaignMessageStatus(input: {
+  companyId: string;
+  sid: string;
+  status: 'sent' | 'delivered' | 'read' | 'failed';
+  error?: string;
+  pricing?: {
+    billable: boolean;
+    category?: string;
+    pricingModel?: string;
+    pricingType?: string;
+  };
+}): Promise<void> {
+  const cm = await CampaignMessageModel.findOne({
+    companyId: new Types.ObjectId(input.companyId),
+    twilioSid: input.sid,
+  })
+    .select('_id campaignId status')
+    .lean();
+  if (!cm) return;
+
+  // read > delivered > sent: a late-arriving 'delivered' must not undo a 'read'.
+  const rank: Record<string, number> = { sent: 1, delivered: 2, read: 3, failed: 3 };
+  const current = rank[String(cm.status)] ?? 0;
+  if (input.status !== 'failed' && current >= (rank[input.status] ?? 0)) return;
+
+  await CampaignMessageModel.updateOne(
+    { _id: cm._id },
+    {
+      $set: {
+        status: input.status,
+        ...(input.error ? { error: input.error } : {}),
+        ...(input.pricing ? { billing: { ...input.pricing, recordedAt: new Date() } } : {}),
+      },
+    },
+  );
+
+  // A message Meta accepted and then rejected was counted as sent; move the count.
+  if (input.status === 'failed' && cm.status !== 'failed') {
+    await CampaignModel.updateOne(
+      { _id: cm.campaignId },
+      { $inc: { 'stats.failed': 1, 'stats.sent': cm.status === 'sent' ? -1 : 0 } },
+    );
+  }
+
+  await settleCampaignIfFinished(String(cm.campaignId));
+}
+
+/**
+ * Moves a campaign to `completed` once every recipient has an outcome.
+ *
+ * `completed` was in the status enum from the start and nothing ever set it, so every
+ * finished campaign stayed "running".
+ */
+export async function settleCampaignIfFinished(campaignId: string): Promise<void> {
+  const camp = await CampaignModel.findById(new Types.ObjectId(campaignId))
+    .select('status stats')
+    .lean();
+  if (!camp || camp.status !== 'running') return;
+
+  const total = camp.stats?.total ?? 0;
+  const done = (camp.stats?.sent ?? 0) + (camp.stats?.failed ?? 0);
+  if (total <= 0 || done < total) return;
+
+  await CampaignModel.updateOne(
+    { _id: new Types.ObjectId(campaignId), status: 'running' },
+    { $set: { status: 'completed', completedAt: new Date() } },
+  );
 }

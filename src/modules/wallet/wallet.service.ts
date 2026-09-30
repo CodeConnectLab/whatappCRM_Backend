@@ -65,3 +65,52 @@ export async function creditCredits(
     ref,
   });
 }
+
+/**
+ * Debits only if the balance covers it, in one atomic update.
+ *
+ * The read-modify-write in `debitCredits` can let two concurrent sends both pass the
+ * balance check; the conditional update cannot. Returns false instead of throwing so a
+ * caller can decide whether that means "skip this message" or "stop the campaign".
+ */
+export async function tryDebitCredits(
+  companyId: string,
+  amount: number,
+  reason: string,
+  ref?: unknown,
+): Promise<boolean> {
+  if (amount <= 0) return true;
+  const wallet = await WalletModel.findOneAndUpdate(
+    { companyId: new Types.ObjectId(companyId), balance: { $gte: amount } },
+    { $inc: { balance: -amount } },
+    { new: true },
+  );
+  if (!wallet) return false;
+  await TransactionModel.create({
+    companyId: new Types.ObjectId(companyId),
+    type: 'debit',
+    amount,
+    balanceAfter: wallet.balance,
+    reason,
+    ref,
+  });
+  return true;
+}
+
+/** Returns a debit to the wallet when the send it paid for did not happen. */
+export async function refundCredits(
+  companyId: string,
+  amount: number,
+  reason: string,
+  ref?: unknown,
+): Promise<void> {
+  if (amount <= 0) return;
+  await creditCredits(companyId, amount, reason, ref);
+}
+
+export async function getBalance(companyId: string): Promise<number> {
+  const w = await WalletModel.findOne({ companyId: new Types.ObjectId(companyId) })
+    .select('balance')
+    .lean();
+  return w?.balance ?? 0;
+}
