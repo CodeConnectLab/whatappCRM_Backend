@@ -305,7 +305,7 @@ async function sendTemplateAction(
     });
     await MessageModel.updateOne({ _id: msgDoc._id }, { $set: { status: 'sent', twilioSid: sid } });
     try {
-      await debitCredits(ctx.companyId, getCreditPerMessage(), 'auto_response', {
+      await debitCredits(ctx.companyId, getCreditPerMessage(), 'auto_response_template', {
         messageId: String(msgDoc._id),
       });
     } catch (debitErr) {

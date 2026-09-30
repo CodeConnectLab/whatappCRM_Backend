@@ -347,6 +347,21 @@ export async function sendOutboundChatMessage(input: {
   }).lean();
   if (!wa) throw new Error('WhatsApp number not configured');
 
+  // Enforced here, not just in the composer. Whether a message is free depends on this
+  // being true, so it cannot be left to the browser — and a send Meta would reject is
+  // better refused before it costs a round trip.
+  const window = serviceWindow({
+    lastInboundAt: chat.lastInboundAt ?? null,
+    everInbound: Boolean(chat.firstInboundAt),
+  });
+  if (window.known && !window.open) {
+    throw new Error(
+      contact.name
+        ? `More than 24 hours since ${contact.name} last wrote, so WhatsApp will not deliver free text — send an approved template instead.`
+        : 'The 24-hour window has closed, so WhatsApp will not deliver free text — send an approved template instead.',
+    );
+  }
+
   let media: OutboundMedia | undefined;
   let link: string | undefined;
   if (input.mediaId) {
@@ -385,16 +400,15 @@ export async function sendOutboundChatMessage(input: {
       { $set: { status: 'sent', twilioSid: sid }, $unset: { statusDetail: '' } },
     );
 
-    try {
-      await debitCredits(input.companyId, getCreditPerMessage(), 'chat_message', {
-        messageId: String(msgDoc._id),
-      });
-    } catch (debitErr) {
-      logger.error('Chat message sent but wallet debit failed', {
-        err: debitErr,
-        messageId: String(msgDoc._id),
-      });
-    }
+    // Not charged. WhatsApp has not billed for a free-form reply inside the service
+    // window since service messages became unlimited and free in November 2024, and
+    // this send path is only reachable while that window is open — the composer and the
+    // API both refuse it otherwise. Charging for it was inventing a cost Meta never
+    // passed on. Templates, which Meta does bill, are charged in
+    // sendChatTemplateMessage below.
+    logger.debug('Free-form reply inside the service window — not billable', {
+      messageId: String(msgDoc._id),
+    });
 
     const preview = body.trim() || `[${media?.kind ?? 'attachment'}]`;
     const chatUpdate: Record<string, unknown> = {

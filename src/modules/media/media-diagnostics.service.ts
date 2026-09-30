@@ -32,6 +32,25 @@ function message(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** True when the endpoint points at this machine rather than at real storage. */
+function endpointIsLocal(endpoint?: string): boolean {
+  if (!endpoint) return false;
+  return /^https?:\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(endpoint.trim());
+}
+
+/**
+ * The AWS SDK speaks XML. Getting HTML back means whatever answered is not S3 at all —
+ * a web server, a proxy, an error page — which is what a stale S3_ENDPOINT looks like.
+ */
+function looksLikeNotS3(detail: string): boolean {
+  return (
+    /Deserialization error/i.test(detail) ||
+    /Expected closing tag/i.test(detail) ||
+    /Unexpected token/i.test(detail) ||
+    /<!DOCTYPE/i.test(detail)
+  );
+}
+
 /**
  * Proves, end to end, whether media storage actually works — rather than whether it is
  * merely configured.
@@ -67,6 +86,23 @@ export async function runMediaDiagnostics(companyId: string): Promise<MediaDiagn
     ...(env.S3_ENDPOINT ? { endpoint: env.S3_ENDPOINT } : {}),
   };
 
+  const localEndpoint = endpointIsLocal(env.S3_ENDPOINT);
+  if (localEndpoint) {
+    steps.push({
+      step: 'Storage endpoint is reachable from this server',
+      ok: false,
+      detail: `S3_ENDPOINT is ${env.S3_ENDPOINT} — that address means "this server", not AWS.`,
+      code: 'LocalEndpoint',
+    });
+    advice.push(
+      `S3_ENDPOINT is set to ${env.S3_ENDPOINT}. That is the MinIO address from the local development example, and it only works if MinIO is running on this same machine.`,
+    );
+    advice.push(
+      'For AWS S3: delete the S3_ENDPOINT and S3_FORCE_PATH_STYLE lines from the API\u2019s .env entirely, set AWS_REGION to the bucket\u2019s real region, and restart the API.',
+    );
+    advice.push('For MinIO: start MinIO on this server, or point S3_ENDPOINT at wherever it runs.');
+  }
+
   const key = makeMediaKey(companyId, `diagnostic-${randomUUID()}.txt`);
   const body = Buffer.from('wtsp media diagnostic', 'utf8');
 
@@ -94,6 +130,13 @@ export async function runMediaDiagnostics(companyId: string): Promise<MediaDiagn
       advice.push('The access key or secret is wrong. Re-copy both into the API’s .env and restart.');
     } else if (code === 'PermanentRedirect' || code === 'AuthorizationHeaderMalformed') {
       advice.push(`AWS_REGION does not match the bucket’s real region. Fix AWS_REGION and restart.`);
+    } else if (looksLikeNotS3(message(e))) {
+      advice.push(
+        `Whatever is answering at ${env.S3_ENDPOINT ?? 'the configured endpoint'} replied with a web page, not S3 — nothing speaking the S3 protocol is listening there.`,
+      );
+      if (!localEndpoint) {
+        advice.push('Check S3_ENDPOINT, or remove it entirely to use AWS S3 directly.');
+      }
     } else {
       advice.push('The server could not write to the bucket — see the detail above and the API logs.');
     }

@@ -128,11 +128,32 @@ export async function ingestInboundMedia(input: {
       metaMediaId: input.metaMediaId,
       err: e,
     });
-    await markMediaUnavailable(
-      input,
-      e instanceof Error ? e.message : 'The file could not be downloaded from WhatsApp.',
-    );
+    await markMediaUnavailable(input, readableStorageError(e));
   }
+}
+
+/**
+ * Turns a storage failure into a sentence an agent can act on.
+ *
+ * The raw SDK error for a misconfigured endpoint is an XML parser complaining about an
+ * HTML `<head>` tag, which tells an agent nothing and alarms them. The underlying
+ * detail stays in the server log.
+ */
+function readableStorageError(e: unknown): string {
+  const raw = e instanceof Error ? e.message : String(e);
+  if (/Deserialization error|Expected closing tag|<!DOCTYPE/i.test(raw)) {
+    return 'Media storage is misconfigured, so this file could not be saved. An admin can check Settings \u2192 Test media storage.';
+  }
+  if (/AccessDenied/i.test(raw)) {
+    return 'Media storage refused the upload. An admin can check Settings \u2192 Test media storage.';
+  }
+  if (/NoSuchBucket/i.test(raw)) {
+    return 'The media storage bucket does not exist. An admin can check Settings \u2192 Test media storage.';
+  }
+  if (/media|download|404|410/i.test(raw)) {
+    return 'WhatsApp no longer has this file. Ask the customer to send it again.';
+  }
+  return 'This file could not be saved. An admin can check Settings \u2192 Test media storage.';
 }
 
 /**
@@ -256,9 +277,6 @@ export async function ingestTwilioInboundMedia(input: {
       messageId: input.messageId,
       err: e,
     });
-    await markMediaUnavailable(
-      input,
-      e instanceof Error ? e.message : 'The file could not be downloaded from Twilio.',
-    );
+    await markMediaUnavailable(input, readableStorageError(e));
   }
 }
