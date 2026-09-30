@@ -183,7 +183,16 @@ function conditionsMatch(rule: RuleDoc, ctx: AutoResponseContext): boolean {
 }
 
 /** Placeholders an auto-response body may use, beyond the shared contact ones. */
-function renderBody(
+/**
+ * Fills the placeholders in an auto-response body.
+ *
+ * Supports a fallback after a pipe — `{{product|our services}}` — because a placeholder
+ * that resolves to nothing wrecks the sentence around it. A lead that matched no product
+ * was being greeted with "thanks for your interest in the ." Anything still unresolved
+ * is dropped along with one adjoining space, so the worst case is a slightly terse
+ * sentence rather than a visibly broken one.
+ */
+export function renderBody(
   body: string,
   ctx: {
     contactName?: string | null;
@@ -193,18 +202,36 @@ function renderBody(
     agentName?: string | null;
   },
 ): string {
-  let out = applyTemplate(body, {
-    name: ctx.contactName,
-    phone: ctx.contactPhone,
-    email: ctx.contactEmail,
-  });
-  const extras: Record<string, string> = {
-    product: ctx.productName ?? '',
-    agent: ctx.agentName ?? '',
+  const values: Record<string, string> = {
+    name: ctx.contactName?.trim() ?? '',
+    phone: ctx.contactPhone?.trim() ?? '',
+    email: ctx.contactEmail?.trim() ?? '',
+    product: ctx.productName?.trim() ?? '',
+    agent: ctx.agentName?.trim() ?? '',
   };
-  for (const [key, val] of Object.entries(extras)) {
-    out = out.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}}`, 'gi'), val);
-  }
+
+  // One pass over every {{ key }} or {{ key|fallback }}, rather than one pass per key,
+  // so a fallback containing another key's name cannot be rewritten in turn.
+  let out = body.replace(
+    /\{\{\s*([a-z_]+)\s*(?:\|([^}]*))?\}\}/gi,
+    (_match, rawKey: string, rawFallback?: string) => {
+      const key = rawKey.trim().toLowerCase();
+      const value = values[key];
+      if (value) return value;
+      const fallback = rawFallback?.trim();
+      if (fallback) return fallback;
+      // Unknown key: leave it visible so the operator notices the typo, rather than
+      // silently shipping a gap.
+      return key in values ? '' : `{{${rawKey}}}`;
+    },
+  );
+
+  // An emptied placeholder leaves "in the  ." — tidy the seams it left behind.
+  out = out
+    .replace(/[ \t]{2,}/g, ' ')
+    .replace(/\s+([.,!?;:])/g, '$1')
+    .replace(/[ \t]+$/gm, '');
+
   return out;
 }
 

@@ -90,6 +90,8 @@ export async function assertCampaignCanStart(
   const wallet = await getWallet(companyId);
   const needed = input.recipientCount * getCreditPerMessage();
   if (wallet.balance < needed) {
-    throw new Error(`Insufficient credits: need ${needed}, wallet has ${wallet.balance}`);
+    throw new Error(
+      `This campaign needs ${needed} credits for ${input.recipientCount} recipients and the wallet has ${wallet.balance}. Top up, or reduce the audience.`,
+    );
   }
 }

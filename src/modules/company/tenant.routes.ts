@@ -306,6 +306,8 @@ export function createTenantRouter(): Router {
     asyncHandler(mediaCtrl.getMediaUrl),
   );
   tenant.get('/media', asyncHandler(mediaCtrl.listMedia));
+  /** Proves whether media storage actually works, rather than merely being configured. */
+  tenant.get('/media/diagnostics', requireCompanyAdmin, asyncHandler(mediaCtrl.getMediaDiagnostics));
 
   /* ------------------------------------------------------- quick replies */
 

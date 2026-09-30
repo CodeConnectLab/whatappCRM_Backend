@@ -88,6 +88,22 @@ export type MetaWebhookBody = {
         statuses?: {
           id?: string;
           status?: string;
+          /**
+           * What Meta actually charged for this message.
+           *
+           * Under per-message pricing (from 1 July 2025) this is the only authoritative
+           * answer to "was this billed, and as what" — a free-form reply inside the
+           * service window comes back billable: false, and a utility template sent
+           * inside an open window comes back type: free_customer_service.
+           */
+          pricing?: {
+            billable?: boolean;
+            pricing_model?: string;
+            /** marketing | utility | authentication | service */
+            category?: string;
+            /** regular | free_customer_service | free_entry_point */
+            type?: string;
+          };
           errors?: {
             code?: number;
             title?: string;
@@ -220,4 +236,45 @@ export function inboundErrorText(m: MetaInboundMessage): string | undefined {
   const text = err.message ?? err.title;
   if (text) return err.code != null ? `${text} (${err.code})` : text;
   return err.code != null ? `Meta error ${err.code}` : undefined;
+}
+
+export const BILLING_CATEGORIES = [
+  'marketing',
+  'utility',
+  'authentication',
+  'service',
+] as const;
+
+export type NormalizedPricing = {
+  billable: boolean;
+  category?: string;
+  pricingModel?: string;
+  pricingType?: string;
+};
+
+/**
+ * Reads Meta's pricing object off a status update.
+ *
+ * `billable` is taken at Meta's word rather than inferred, because the rules behind it
+ * (free service messages, free utility inside an open window, free entry points) change
+ * and Meta is the one billing.
+ */
+export function normalizePricing(
+  pricing:
+    | { billable?: boolean; pricing_model?: string; category?: string; type?: string }
+    | undefined,
+): NormalizedPricing | undefined {
+  if (!pricing) return undefined;
+  const category = pricing.category?.trim().toLowerCase();
+  return {
+    // Meta omits `billable` on some free types; an explicit false or a free type both
+    // mean "not charged".
+    billable:
+      pricing.billable === true &&
+      pricing.type !== 'free_customer_service' &&
+      pricing.type !== 'free_entry_point',
+    ...(category ? { category } : {}),
+    ...(pricing.pricing_model ? { pricingModel: pricing.pricing_model } : {}),
+    ...(pricing.type ? { pricingType: pricing.type } : {}),
+  };
 }
