@@ -87,6 +87,44 @@ if (!parsed.success) {
 
 export const env = parsed.data;
 
+/**
+ * Values copied straight out of `.env.example`.
+ *
+ * These are published in the repository, so anything still using them is effectively
+ * running with no secret at all: the JWT secrets let anyone mint a token for any user,
+ * and the encryption key is what protects stored Meta and CRM credentials at rest.
+ * Copying the example file and filling in only the parts that produce a visible error
+ * is an easy mistake, and nothing used to catch it.
+ */
+const PLACEHOLDER_SECRETS: Record<string, string> = {
+  JWT_ACCESS_SECRET: 'change-me-access-secret-min-32-chars-long-please',
+  JWT_REFRESH_SECRET: 'change-me-refresh-secret-min-32-chars-long-please',
+  ENCRYPTION_KEY: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+};
+
+const usingPlaceholders = Object.entries(PLACEHOLDER_SECRETS)
+  .filter(([key, placeholder]) => (env as Record<string, unknown>)[key] === placeholder)
+  .map(([key]) => key);
+
+if (usingPlaceholders.length) {
+  const list = usingPlaceholders.join(', ');
+  // Refuses in production, shouts in development — a development server often is the
+  // production server with NODE_ENV never changed, which is exactly how this survives.
+  if (env.NODE_ENV === 'production') {
+    console.error(
+      `Refusing to start: ${list} still hold the example values from .env.example. ` +
+        'Generate real ones: openssl rand -hex 32',
+    );
+    process.exit(1);
+  }
+  console.warn(
+    `\n⚠️  ${list} still hold the example values from .env.example.\n` +
+      '   Anyone can read them in the repo. On a server reachable from the internet this\n' +
+      '   means forged logins and unprotected stored credentials.\n' +
+      '   Generate real ones with:  openssl rand -hex 32\n',
+  );
+}
+
 /** True when MinIO or AWS credentials are set (presigned uploads will work). */
 export function isS3MediaConfigured(): boolean {
   return Boolean(
