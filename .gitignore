@@ -50,3 +50,6 @@ docker-data/
 uploads/
 tmp/
 temp/
+
+# P0 verification raw outputs (contain client PII/phone numbers)
+p0-results/

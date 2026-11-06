@@ -38,23 +38,42 @@ depends on one answer: **does `pricing_analytics` return a real `cost`, or `null
 
 ---
 
-## Results (paste after running)
+## Results — LIVE RUN 2026-11-06
 
-> Fill HTTP status + the key observation for each. Raw JSON is saved under
-> `p0-results/<timestamp>/` by the script.
+Ran against WABA `1721309295524444` ("code connect", currency INR) on `v21.0`.
+Raw JSON saved locally under `p0-results/<timestamp>/` (git-ignored — contains the
+client phone number).
 
 | # | HTTP | Observed | cost present? |
 |---|------|----------|---------------|
-| 1 pricing_analytics COST+VOLUME | | | |
-| 2 TIER dimension | | | n/a |
-| 3 MONTHLY granularity | | | |
-| 4 conversation_analytics | | | |
-| 5 analytics sent/delivered | | | n/a |
-| 6 WABA fields | | | n/a |
-| 7 phone_numbers limits | | | n/a |
-| 8 subscribed_apps GET | | | n/a |
+| 1 pricing_analytics COST+VOLUME | 200 | `cost` + `volume` returned per data point. All sampled points were `pricing_type=FREE_CUSTOMER_SERVICE`, `pricing_category=SERVICE`, `cost=0` (genuinely free). No BSP "cost not available" error. | ✅ **YES — numeric, not null** |
+| 2 TIER dimension | 200 | Accepted (no error). No `tier` key in points because all volume was free-service → no tier breakdown. Valid param; populates for billable volume. | n/a |
+| 3 MONTHLY granularity | 200 | Valid. Monthly buckets: volume 8 then 10, cost 0. | ✅ |
+| 4 conversation_analytics | 200 | **Empty** — response was `{"id":...}` only, field silently dropped. Effectively dead under per-message pricing. | ❌ unusable |
+| 5 analytics sent/delivered | 200 | `data_points[]` with `sent`/`delivered` per day (1/1, 1/1, 2/2). `phone_numbers=["917376103969"]`. | n/a |
+| 6 WABA fields | 200 | `currency=INR`, `account_review_status=APPROVED`, `business_verification_status=verified`, `health_status={can_send_message:AVAILABLE, entities:[WABA,BUSINESS,APP all AVAILABLE]}`, `timezone_id=71`, `message_template_namespace` present. | n/a |
+| 7 phone_numbers limits | 200 | `whatsapp_business_manager_messaging_limit="TIER_2K"` ✅. `messaging_limit_tier` **absent (deprecated, silently dropped)**. Also `quality_rating=GREEN`, `throughput.level=STANDARD`, `display_phone_number="+91 73761 03969"`. | n/a |
+| 8 subscribed_apps GET | 200 | One app subscribed: `connectcrm` (id `1385910615841011`). `override_callback_uri` not set (uses app-level webhook). | n/a |
 
-**Final P3 verdict:** _actual cost available_ / _estimate only_ → _______________
+**Final P3 verdict: ACTUAL COST AVAILABLE** (not estimate-only). `pricing_analytics.cost`
+is present and numeric for this WABA — the BSP cost-hidden case does **not** apply here.
+
+**Caveat / final confirmation step:** the test window held only free service messages
+(`cost=0` is correct), so a *non-zero* cost was not directly observed. After any paid
+(marketing / utility / authentication) send, re-run probe #1 to see a real cost value.
+
+### Build notes for P3 (from this run)
+- **Cost/volume source:** `pricing_analytics` with `metric_types([COST,VOLUME])` and
+  `dimensions([COUNTRY,PRICING_CATEGORY,PRICING_TYPE])` (add `TIER` when you want the
+  tier breakdown). Treat `pricing_type=FREE_*` as non-billable; `regular` as charged.
+- **Do NOT use `conversation_analytics`** — it returns empty here.
+- **Volume/delivery source:** `analytics` (`sent`/`delivered`) is reliable.
+- **Messaging limit:** use `whatsapp_business_manager_messaging_limit` (e.g. `TIER_2K`),
+  NOT the deprecated `messaging_limit_tier`.
+- **Health panel:** `health_status.can_send_message` + per-entity statuses + `quality_rating`
+  + `throughput.level` give a complete readiness widget.
+- **Graph version:** `v21.0` already honors every field above (incl. the new limit field),
+  so no version bump needed for P3.
 
 ---
 
