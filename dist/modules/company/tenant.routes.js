@@ -5,7 +5,9 @@ import { idParamSchema, validateRequest } from '../../middleware/validate.js';
 import { requireAuth } from '../../middleware/auth.js';
 import { tenantMiddleware } from '../../middleware/tenant.js';
 import { requireCompanyAdmin, requireAgent } from '../../middleware/rbac.js';
+import { subscriptionGuard } from '../../middleware/subscription.js';
 import * as companyCtrl from './company.controller.js';
+import * as subscriptionCtrl from '../subscription/subscription.controller.js';
 import * as twilioCtrl from '../twilio/twilio.controller.js';
 import * as contactCtrl from '../contact/contact.controller.js';
 import * as activityCtrl from '../activity/activity.controller.js';
@@ -36,6 +38,13 @@ const upload = multer({
 export function createTenantRouter() {
     const tenant = Router();
     tenant.use(requireAuth, tenantMiddleware, requireAgent);
+    /**
+     * Deliberately above `subscriptionGuard`: the expired wall and the Settings →
+     * Subscription tab have to stay readable, or a locked-out admin cannot even see
+     * which plan lapsed or who to call.
+     */
+    tenant.get('/subscription', asyncHandler(subscriptionCtrl.getSubscription));
+    tenant.use(subscriptionGuard);
     tenant.get('/workspace/summary', asyncHandler(companyCtrl.getWorkspaceSummary));
     tenant.get('/activity-logs', asyncHandler(activityCtrl.listActivityLogs));
     tenant.get('/team', asyncHandler(companyCtrl.listTeam));

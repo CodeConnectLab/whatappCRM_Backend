@@ -12,6 +12,12 @@ const userSchema = new Schema({
     mustChangePassword: { type: Boolean, default: false },
     /** Who created this account, when it was not a self-service registration. */
     createdByUserId: { type: Schema.Types.ObjectId, ref: 'User' },
+    /**
+     * Bumped to invalidate every token already issued to this account. Tokens carry the
+     * value they were signed with, so a mismatch in `requireAuth` ends the session at
+     * once — which is how an operator kills live sessions straight from Mongo.
+     */
+    tokenVersion: { type: Number, default: 0 },
     refreshTokenHashes: { type: [String], default: [] },
     passwordResetTokenHash: { type: String },
     passwordResetExpires: { type: Date },
