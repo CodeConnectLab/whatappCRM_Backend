@@ -26,6 +26,11 @@ import { logger } from '../../utils/logger.js';
 
 import { settleCampaignIfFinished } from './campaign.service.js';
 
+import {
+  getCompanySubscriptionLean,
+  isExpired,
+} from '../subscription/subscription.service.js';
+
 
 
 export interface CampaignJob {
@@ -56,6 +61,18 @@ export function startCampaignWorker(): Worker<CampaignJob> {
 
         return;
 
+      }
+
+      /**
+       * Outbound sends are billable, so an expired workspace stops sending. Inbound is
+       * untouched — webhook ingestion keeps writing leads throughout a lapse. Pausing
+       * rather than failing means the remaining audience resumes on renewal.
+       */
+      const company = await getCompanySubscriptionLean(companyId);
+      if (!company || isExpired(company)) {
+        await CampaignModel.updateOne({ _id: camp._id }, { $set: { status: 'paused' } });
+        logger.warn('Campaign paused: subscription expired', { companyId, campaignId });
+        return;
       }
 
 

@@ -12,6 +12,8 @@ export type JwtPayload = {
   sub: string;
   email: string;
   isSuperAdmin: boolean;
+  /** Token version at signing time; checked against the user row on every request. */
+  tv: number;
   typ: 'access' | 'refresh';
 };
 
