@@ -178,14 +178,18 @@ export function inboundMessageText(m: MetaInboundMessage): string {
       return m.reaction?.emoji ? `[reacted ${m.reaction.emoji}]` : '[reaction]';
     case 'order':
       return m.order?.text ?? '[order]';
-    case 'unsupported': {
-      // Meta sends type "unsupported" with an errors array saying why — usually
-      // error 131051, a WhatsApp feature the Cloud API does not relay (polls,
-      // view-once media, live location, deleted messages and similar). Surfacing
-      // the reason beats a bare placeholder an agent cannot act on.
-      const reason = inboundErrorText(m);
-      return reason ? `[unsupported message — ${reason}]` : '[unsupported message]';
-    }
+    case 'unsupported':
+      /**
+       * Meta relays some WhatsApp features as type "unsupported" and does not send
+       * the content, so there is nothing to recover — error 131051 arrives with
+       * `raw_type: "unknown"`, meaning Meta itself could not identify the type.
+       *
+       * The agent gets an instruction rather than the error text: the raw error is
+       * kept on the message's `statusDetail` and the whole payload in `webhooklogs`,
+       * which is where a diagnosis belongs. "Message type unknown (131051)" in the
+       * inbox told an agent nothing they could act on.
+       */
+      return '[WhatsApp could not forward this message — ask the customer to resend it as text or a photo]';
     default:
       return m.type ? `[${m.type}]` : '[message]';
   }
