@@ -10,6 +10,11 @@ import { slugify } from '../../utils/slug.js';
 import { ensureWallet } from '../wallet/wallet.service.js';
 import { logActivity } from '../activity/activity.service.js';
 import { logger } from '../../utils/logger.js';
+import { hasAnyActiveCompany } from '../subscription/subscription.service.js';
+import {
+  SUBSCRIPTION_ERROR,
+  SUBSCRIPTION_EXPIRED_MESSAGE,
+} from '../subscription/subscription.constants.js';
 
 export async function register(req: Request, res: Response): Promise<void> {
   const { email, password, name, companyName } = req.body as {
@@ -53,6 +58,7 @@ export async function register(req: Request, res: Response): Promise<void> {
     sub: String(user._id),
     email: user.email,
     isSuperAdmin: user.isSuperAdmin,
+    tv: user.tokenVersion ?? 0,
   };
 
   res.status(201).json({
@@ -76,10 +82,16 @@ export async function login(req: Request, res: Response): Promise<void> {
     return;
   }
 
+  /**
+   * An expired workspace still signs in. The client needs a token to read `/me` and
+   * `/subscription` so the expired screen can name the plan and the support contact;
+   * every other route is refused by `subscriptionGuard`.
+   */
   const tokenPayload = {
     sub: String(user._id),
     email: user.email,
     isSuperAdmin: user.isSuperAdmin,
+    tv: user.tokenVersion ?? 0,
   };
 
   res.json({
@@ -98,10 +110,27 @@ export async function refresh(req: Request, res: Response): Promise<void> {
       res.status(401).json({ error: 'Unauthorized' });
       return;
     }
+    if ((user.tokenVersion ?? 0) !== (payload.tv ?? 0)) {
+      res.status(401).json({ error: 'Session ended, please sign in again' });
+      return;
+    }
+    /**
+     * Refusing renewal is what makes expiry bite: the live access token dies at its own
+     * TTL instead of being rolled forward indefinitely. Super admins are exempt, and so
+     * is anyone who still has at least one workspace in good standing.
+     */
+    if (!user.isSuperAdmin && !(await hasAnyActiveCompany(String(user._id)))) {
+      res.status(401).json({
+        error: SUBSCRIPTION_EXPIRED_MESSAGE,
+        code: SUBSCRIPTION_ERROR.SUBSCRIPTION_EXPIRED,
+      });
+      return;
+    }
     const next = {
       sub: String(user._id),
       email: user.email,
       isSuperAdmin: user.isSuperAdmin,
+      tv: user.tokenVersion ?? 0,
     };
     res.json({
       accessToken: signAccessToken(next),

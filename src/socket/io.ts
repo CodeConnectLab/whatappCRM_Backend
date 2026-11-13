@@ -3,6 +3,11 @@ import { Server } from 'socket.io';
 import { env } from '../config/env.js';
 import { verifyAccessToken } from '../utils/jwt.js';
 import { MembershipModel } from '../modules/company/membership.model.js';
+import { UserModel } from '../modules/user/user.model.js';
+import {
+  getCompanySubscriptionLean,
+  isExpired,
+} from '../modules/subscription/subscription.service.js';
 import { Types } from 'mongoose';
 
 let io: Server | null = null;
@@ -22,6 +27,11 @@ export function initSocket(server: HttpServer): Server {
       }
       const payload = verifyAccessToken(token);
       if (!payload.isSuperAdmin) {
+        const user = await UserModel.findById(payload.sub).select('tokenVersion deletedAt').lean();
+        if (!user || user.deletedAt || (user.tokenVersion ?? 0) !== (payload.tv ?? 0)) {
+          next(new Error('Unauthorized'));
+          return;
+        }
         const m = await MembershipModel.findOne({
           userId: new Types.ObjectId(payload.sub),
           companyId: new Types.ObjectId(companyId),
@@ -29,6 +39,12 @@ export function initSocket(server: HttpServer): Server {
         }).lean();
         if (!m) {
           next(new Error('Forbidden'));
+          return;
+        }
+        // An expired workspace gets no live feed either, matching the HTTP guard.
+        const company = await getCompanySubscriptionLean(companyId);
+        if (!company || isExpired(company)) {
+          next(new Error('Subscription expired'));
           return;
         }
       }
