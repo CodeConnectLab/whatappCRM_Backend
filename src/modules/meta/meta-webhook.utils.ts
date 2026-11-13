@@ -75,6 +75,12 @@ export type MetaInboundMessage = {
   context?: { from?: string; id?: string };
   referral?: MetaReferral;
   errors?: { code?: number; title?: string; message?: string }[];
+  /**
+   * Present on `type: "unsupported"`. Meta started naming the real type here in
+   * November 2025; older senders and types Meta cannot classify still arrive as
+   * "unknown", which is not one of its documented values.
+   */
+  unsupported?: { type?: string; raw_type?: string };
 };
 
 export type MetaWebhookBody = {
@@ -133,6 +139,33 @@ export function normalizeInboundPhone(from: string): string {
 }
 
 /**
+ * Meta's documented values for `unsupported.type`, phrased for an agent reading the
+ * inbox. Anything outside this list — including the "unknown" Meta sends when its own
+ * parser cannot classify the message — falls back to the generic line.
+ */
+const UNSUPPORTED_TYPE_LABELS: Record<string, string> = {
+  button: 'a button message',
+  edit: 'an edited message',
+  errors: 'a message',
+  gif: 'a GIF',
+  group_invite: 'a group invite',
+  hsm: 'a template message',
+  image: 'an image',
+  interactive: 'an interactive message',
+  keep_in_chat: 'a kept message',
+  link_preview: 'a link preview',
+  list: 'a list message',
+  location: 'a location',
+  media_placeholder: 'a media file',
+  order: 'an order',
+  pin: 'a pinned message',
+  poll_creation: 'a poll',
+  poll_update: 'a poll vote',
+  product: 'a product',
+  reaction: 'a reaction',
+};
+
+/**
  * Readable body for any inbound message type.
  *
  * Non-text messages used to be dropped on the floor, which silently lost every lead
@@ -178,18 +211,22 @@ export function inboundMessageText(m: MetaInboundMessage): string {
       return m.reaction?.emoji ? `[reacted ${m.reaction.emoji}]` : '[reaction]';
     case 'order':
       return m.order?.text ?? '[order]';
-    case 'unsupported':
+    case 'unsupported': {
       /**
-       * Meta relays some WhatsApp features as type "unsupported" and does not send
-       * the content, so there is nothing to recover — error 131051 arrives with
-       * `raw_type: "unknown"`, meaning Meta itself could not identify the type.
+       * Meta relays some WhatsApp features as type "unsupported" and never sends the
+       * content, so there is nothing to recover. Since November 2025 it names the real
+       * type in `unsupported.type`; when it does, say so, because "the customer sent a
+       * poll" is something an agent can actually answer. Types Meta cannot classify
+       * arrive as "unknown" and fall back to the generic line.
        *
-       * The agent gets an instruction rather than the error text: the raw error is
-       * kept on the message's `statusDetail` and the whole payload in `webhooklogs`,
-       * which is where a diagnosis belongs. "Message type unknown (131051)" in the
-       * inbox told an agent nothing they could act on.
+       * The raw error stays on the message's `statusDetail` and the whole payload in
+       * `webhooklogs` — a diagnosis belongs there, not in a customer-facing thread.
        */
-      return '[WhatsApp could not forward this message — ask the customer to resend it as text or a photo]';
+      const named = UNSUPPORTED_TYPE_LABELS[m.unsupported?.type ?? ''];
+      return named
+        ? `[Customer sent ${named}, which WhatsApp could not forward — ask them to resend it as text or a photo]`
+        : '[WhatsApp could not forward this message — ask the customer to resend it as text or a photo]';
+    }
     default:
       return m.type ? `[${m.type}]` : '[message]';
   }
